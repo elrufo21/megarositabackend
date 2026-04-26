@@ -23,7 +23,17 @@ public class NotaPedidoRepository : INotaPedido
 
     public async Task<string> RegistrarOrdenAsync(string data, CancellationToken cancellationToken = default)
     {
-        var result = await _accesoDatos.EjecutarComandoAsync("uspinsertarNotaB", "@ListaOrden", data, cancellationToken);
+        var result = await _accesoDatos.EjecutarComandoConFallbackAsync(
+            new (string StoredProcedure, string ParameterName)[]
+            {
+                ("web.uspinsertarNotaB_web", "@ListaOrden"),
+                ("dbo.uspinsertarNotaB_web", "@ListaOrden"),
+                ("web.uspinsertarNotaB", "@ListaOrden"),
+                ("dbo.uspinsertarNotaB", "@ListaOrden"),
+                ("uspinsertarNotaB", "@ListaOrden")
+            },
+            data,
+            cancellationToken);
         return string.IsNullOrWhiteSpace(result) ? "error" : result;
     }
 
@@ -31,6 +41,9 @@ public class NotaPedidoRepository : INotaPedido
     {
         var attempts = new (string Sp, string Param)[]
         {
+            ("web.uspEditarNotaPedidowEB_web", "@Data"),
+            ("web.uspEditarNotaPedidowEB", "@Data"),
+            ("dbo.uspEditarNotaPedidowEB", "@Data"),
             ("uspEditarNotaPedidowEB", "@Data"),
             ("uspEditarNotaPedido", "@Data"),
             ("uspEditarNotaPedido", "@ListaOrden")
@@ -780,20 +793,45 @@ public class NotaPedidoRepository : INotaPedido
     public async Task<IReadOnlyList<EListaNota>> ListarAsync(DateTime fechaInicio, DateTime fechaFin, int page = 1, int pageSize = 50, CancellationToken cancellationToken = default)
     {
         (page, pageSize) = NormalizePagination(page, pageSize);
-
-        const string sp = "listaNotaPedido";
-        await using var con = new SqlConnection(_connectionString);
-        await using var cmd = new SqlCommand(sp, con)
+        var attempts = new[]
         {
-            CommandTimeout = 300,
-            CommandType = CommandType.StoredProcedure
+            "web.listaNotaPedido_web",
+            "web.listaNotaPedido",
+            "dbo.listaNotaPedido",
+            "listaNotaPedido"
         };
-        cmd.Parameters.AddWithValue("@FechaInicio", fechaInicio.Date);
-        cmd.Parameters.AddWithValue("@FechaFin", fechaFin.Date);
 
-        await con.OpenAsync(cancellationToken);
-        var scalar = await cmd.ExecuteScalarAsync(cancellationToken);
-        var result = scalar?.ToString() ?? string.Empty;
+        SqlException? lastFallbackException = null;
+        string result = string.Empty;
+
+        foreach (var sp in attempts)
+        {
+            try
+            {
+                await using var con = new SqlConnection(_connectionString);
+                await using var cmd = new SqlCommand(sp, con)
+                {
+                    CommandTimeout = 300,
+                    CommandType = CommandType.StoredProcedure
+                };
+                cmd.Parameters.AddWithValue("@FechaInicio", fechaInicio.Date);
+                cmd.Parameters.AddWithValue("@FechaFin", fechaFin.Date);
+
+                await con.OpenAsync(cancellationToken);
+                var scalar = await cmd.ExecuteScalarAsync(cancellationToken);
+                result = scalar?.ToString() ?? string.Empty;
+                break;
+            }
+            catch (SqlException ex) when (IsMissingProcedureOrParameter(ex))
+            {
+                lastFallbackException = ex;
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(result) && lastFallbackException is not null)
+        {
+            throw lastFallbackException;
+        }
 
         if (string.IsNullOrWhiteSpace(result))
         {

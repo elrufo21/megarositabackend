@@ -35,6 +35,34 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.Configuration.AddEnvironmentVariables();
 
+const string DevelopmentJwtFallbackKey = "Megarosita_Dev_Jwt_Key_2026_AtLeast_64_Bytes_For_HS512_Signing_ABC123456789";
+var jwtSigningKey = builder.Configuration["JwtSettings:Key"];
+
+if (builder.Environment.IsDevelopment())
+{
+    var isMissingOrPlaceholder = string.IsNullOrWhiteSpace(jwtSigningKey) ||
+                                 string.Equals(jwtSigningKey, "CHANGE_ME", StringComparison.OrdinalIgnoreCase);
+    var isTooShortForHs512 = !string.IsNullOrWhiteSpace(jwtSigningKey) &&
+                             Encoding.UTF8.GetByteCount(jwtSigningKey) < 64;
+
+    if (isMissingOrPlaceholder || isTooShortForHs512)
+    {
+        builder.Configuration["JwtSettings:Key"] = DevelopmentJwtFallbackKey;
+        jwtSigningKey = DevelopmentJwtFallbackKey;
+        Console.WriteLine("[DEV] JwtSettings:Key invalida o placeholder. Se usa fallback local para pruebas.");
+    }
+}
+
+if (string.IsNullOrWhiteSpace(jwtSigningKey))
+{
+    throw new InvalidOperationException("Missing JwtSettings:Key. Configure it via environment variables, Secret Manager, or appsettings.");
+}
+
+if (Encoding.UTF8.GetByteCount(jwtSigningKey) < 64)
+{
+    throw new InvalidOperationException("JwtSettings:Key must be at least 64 bytes for HS512.");
+}
+
 builder.Services.AddInfrastructureServices(builder.Configuration);
 builder.Services.AddApplicationServices(builder.Configuration);
 
@@ -107,12 +135,6 @@ identityBuilder.AddSignInManager<SignInManager<Usuario>>();
 
 builder.Services.TryAddSingleton<ISystemClock, SystemClock>();
 
-
-var jwtSigningKey = builder.Configuration["JwtSettings:Key"];
-if (string.IsNullOrWhiteSpace(jwtSigningKey))
-{
-    throw new InvalidOperationException("Missing JwtSettings:Key. Configure it via environment variables or Secret Manager.");
-}
 
 var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtSigningKey));
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)

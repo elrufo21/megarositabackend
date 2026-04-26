@@ -135,41 +135,228 @@ public class ProductoRepository : IProducto
         CancellationToken cancellationToken = default)
     {
         (pagina, tamanoPagina) = NormalizePagination(pagina, tamanoPagina);
-
-        await using var con = new SqlConnection(_connectionString);
-        await using var cmd = new SqlCommand("dbo.listarProductos", con)
+        var attempts = new[]
         {
-            CommandType = CommandType.StoredProcedure,
-            CommandTimeout = 300
+            "web.listarProductos_web",
+            "web.listarProductos",
+            "dbo.listarProductos",
+            "listarProductos"
         };
 
-        cmd.Parameters.AddWithValue("@Busqueda", (object?)busqueda ?? string.Empty);
-        cmd.Parameters.AddWithValue("@Pagina", pagina);
-        cmd.Parameters.AddWithValue("@TamanoPagina", tamanoPagina);
+        SqlException? lastFallbackException = null;
 
-        await con.OpenAsync(cancellationToken);
-        await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
-
-        var items = new List<ProductoListadoItem>();
-        var totalRegistros = 0;
-
-        while (await reader.ReadAsync(cancellationToken))
+        foreach (var sp in attempts)
         {
-            if (totalRegistros == 0)
+            try
             {
-                totalRegistros = ToInt32(reader, "TotalRegistros");
-            }
+                await using var con = new SqlConnection(_connectionString);
+                await using var cmd = new SqlCommand(sp, con)
+                {
+                    CommandType = CommandType.StoredProcedure,
+                    CommandTimeout = 300
+                };
 
-            items.Add(MapProductoListado(reader));
+                cmd.Parameters.AddWithValue("@Busqueda", (object?)busqueda ?? string.Empty);
+                cmd.Parameters.AddWithValue("@Pagina", pagina);
+                cmd.Parameters.AddWithValue("@TamanoPagina", tamanoPagina);
+
+                await con.OpenAsync(cancellationToken);
+                await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+
+                var items = new List<ProductoListadoItem>();
+                var totalRegistros = 0;
+
+                while (await reader.ReadAsync(cancellationToken))
+                {
+                    if (totalRegistros == 0)
+                    {
+                        totalRegistros = ToInt32(reader, "TotalRegistros");
+                    }
+
+                    items.Add(MapProductoListado(reader));
+                }
+
+                return new ProductoListadoPaginadoResponse
+                {
+                    Pagina = pagina,
+                    TamanoPagina = tamanoPagina,
+                    TotalRegistros = totalRegistros,
+                    Items = items
+                };
+            }
+            catch (SqlException ex) when (IsMissingProcedureOrParameter(ex) || IsSchemaIncompatibility(ex))
+            {
+                lastFallbackException = ex;
+            }
+            catch (IndexOutOfRangeException)
+            {
+                // Resultset shape mismatch with expected web pagination contract.
+                // Continue trying legacy procedure names below.
+            }
+            catch (InvalidCastException)
+            {
+                // Resultset type mismatch with expected web pagination contract.
+                // Continue trying legacy procedure names below.
+            }
+        }
+
+        var legacyFallback = await TryListarProductosDesdeRawLegadoAsync(busqueda, pagina, tamanoPagina, cancellationToken);
+        if (legacyFallback is not null)
+        {
+            return legacyFallback;
+        }
+
+        if (lastFallbackException is not null)
+        {
+            throw new InvalidOperationException(
+                "No se pudo listar productos con SP web ni con fallback legado. Verifique despliegue de SPs y esquema de BD.",
+                lastFallbackException);
         }
 
         return new ProductoListadoPaginadoResponse
         {
             Pagina = pagina,
             TamanoPagina = tamanoPagina,
-            TotalRegistros = totalRegistros,
-            Items = items
+            TotalRegistros = 0,
+            Items = new List<ProductoListadoItem>()
         };
+    }
+
+    private async Task<ProductoListadoPaginadoResponse?> TryListarProductosDesdeRawLegadoAsync(
+        string? busqueda,
+        int pagina,
+        int tamanoPagina,
+        CancellationToken cancellationToken)
+    {
+        var query = (busqueda ?? string.Empty).Trim();
+        var attempts = string.IsNullOrWhiteSpace(query)
+            ? new (string StoredProcedure, string? ParameterName)[]
+            {
+                ("uspListaWebProducto", null),
+                ("web.uspListaWebProducto", null),
+                ("dbo.uspListaWebProducto", null)
+            }
+            : new (string StoredProcedure, string? ParameterName)[]
+            {
+                ("uspBuscaWebProducto", "@Descripcion"),
+                ("web.uspBuscaWebProducto", "@Descripcion"),
+                ("dbo.uspBuscaWebProducto", "@Descripcion")
+            };
+
+        foreach (var attempt in attempts)
+        {
+            try
+            {
+                var raw = attempt.ParameterName is null
+                    ? await _accesoDatos.EjecutarComandoAsync(attempt.StoredProcedure, cancellationToken: cancellationToken)
+                    : await _accesoDatos.EjecutarComandoAsync(attempt.StoredProcedure, attempt.ParameterName, query, cancellationToken);
+
+                if (string.IsNullOrWhiteSpace(raw))
+                {
+                    continue;
+                }
+
+                var parsed = ParseListadoLegado(raw);
+                if (!string.IsNullOrWhiteSpace(query))
+                {
+                    parsed = parsed
+                        .Where(x =>
+                            (!string.IsNullOrWhiteSpace(x.Descripcion) &&
+                             x.Descripcion.Contains(query, StringComparison.OrdinalIgnoreCase)) ||
+                            (!string.IsNullOrWhiteSpace(x.ProductoCodigo) &&
+                             x.ProductoCodigo.Contains(query, StringComparison.OrdinalIgnoreCase)) ||
+                            (!string.IsNullOrWhiteSpace(x.ProductoNombre) &&
+                             x.ProductoNombre.Contains(query, StringComparison.OrdinalIgnoreCase)))
+                        .ToList();
+                }
+
+                var total = parsed.Count;
+                var paged = parsed
+                    .Skip((pagina - 1) * tamanoPagina)
+                    .Take(tamanoPagina)
+                    .ToList();
+
+                return new ProductoListadoPaginadoResponse
+                {
+                    Pagina = pagina,
+                    TamanoPagina = tamanoPagina,
+                    TotalRegistros = total,
+                    Items = paged
+                };
+            }
+            catch (SqlException ex) when (IsMissingProcedureOrParameter(ex) || IsSchemaIncompatibility(ex))
+            {
+                // keep trying fallback variants
+            }
+            catch (FormatException)
+            {
+                // malformed legacy payload; try another fallback source
+            }
+            catch (IndexOutOfRangeException)
+            {
+                // malformed legacy payload; try another fallback source
+            }
+        }
+
+        return null;
+    }
+
+    private static List<ProductoListadoItem> ParseListadoLegado(string raw)
+    {
+        var result = new List<ProductoListadoItem>();
+        var rows = raw.Split('¬', StringSplitOptions.RemoveEmptyEntries);
+        foreach (var row in rows)
+        {
+            var fields = row.Split('|');
+            if (fields.Length == 0 || string.Equals(fields[0], "~", StringComparison.Ordinal))
+            {
+                break;
+            }
+
+            var idRaw = Field(fields, 0);
+            var descripcion = Field(fields, 1);
+            var imagen = Field(fields, 4);
+            if (!string.IsNullOrWhiteSpace(imagen) &&
+                imagen.Contains("ArchivoSistema", StringComparison.OrdinalIgnoreCase))
+            {
+                imagen = string.Empty;
+            }
+
+            result.Add(new ProductoListadoItem
+            {
+                IdProducto = long.TryParse(idRaw, NumberStyles.Any, CultureInfo.InvariantCulture, out var id)
+                    ? id
+                    : 0,
+                ProductoCodigo = string.Empty,
+                ProductoNombre = descripcion,
+                Descripcion = descripcion,
+                ProductoCantidad = Field(fields, 3),
+                ProductoUM = NormalizeUnidad(Field(fields, 5)),
+                ProductoVenta = Field(fields, 2),
+                ProductoVentaB = Field(fields, 2),
+                ProductoImagen = imagen,
+                ValorUM = Field(fields, 6),
+                ProductoEstado = "BUENO"
+            });
+        }
+
+        return result;
+    }
+
+    private static string? Field(string[] fields, int index)
+    {
+        return index >= 0 && index < fields.Length ? fields[index] : null;
+    }
+
+    private static string? NormalizeUnidad(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return value;
+        }
+
+        var trimmed = value.Trim();
+        return trimmed.Length > 3 ? trimmed[..3] : trimmed;
     }
 
     public async Task<long> GuardarUnidadMedidaProductoAsync(GuardarUnidadMedidaProductoRequest request, CancellationToken cancellationToken = default)
@@ -517,5 +704,21 @@ public class ProductoRepository : IProducto
 
         var result = await cmd.ExecuteScalarAsync(cancellationToken);
         return result is not null && result != DBNull.Value;
+    }
+
+    private static bool IsMissingProcedureOrParameter(SqlException ex)
+    {
+        // 2812: stored procedure not found
+        // 201 : expects parameter not supplied
+        // 8144: too many arguments
+        return ex.Number == 2812 || ex.Number == 201 || ex.Number == 8144;
+    }
+
+    private static bool IsSchemaIncompatibility(SqlException ex)
+    {
+        // 207: invalid column name
+        // 208: invalid object name
+        // 213: column name/number mismatch
+        return ex.Number == 207 || ex.Number == 208 || ex.Number == 213;
     }
 }

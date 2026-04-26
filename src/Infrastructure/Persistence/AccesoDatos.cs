@@ -47,4 +47,48 @@ public class AccesoDatos
             throw;
         }
     }
+
+    public async Task<string> EjecutarComandoConFallbackAsync(
+        IReadOnlyList<(string StoredProcedure, string ParameterName)> intentos,
+        string parametroValor = "",
+        CancellationToken cancellationToken = default)
+    {
+        if (intentos is null || intentos.Count == 0)
+        {
+            throw new ArgumentException("Debe proporcionar al menos un procedimiento para fallback.", nameof(intentos));
+        }
+
+        SqlException? lastFallbackException = null;
+
+        foreach (var intento in intentos)
+        {
+            try
+            {
+                return await EjecutarComandoAsync(
+                    intento.StoredProcedure,
+                    intento.ParameterName,
+                    parametroValor,
+                    cancellationToken);
+            }
+            catch (SqlException ex) when (IsMissingProcedureOrParameter(ex))
+            {
+                lastFallbackException = ex;
+            }
+        }
+
+        if (lastFallbackException is not null)
+        {
+            throw lastFallbackException;
+        }
+
+        return string.Empty;
+    }
+
+    private static bool IsMissingProcedureOrParameter(SqlException ex)
+    {
+        // 2812: stored procedure not found
+        // 201 : expects parameter not supplied
+        // 8144: too many arguments
+        return ex.Number == 2812 || ex.Number == 201 || ex.Number == 8144;
+    }
 }

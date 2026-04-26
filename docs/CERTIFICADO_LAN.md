@@ -27,7 +27,7 @@ mkcert -install
 ```
 
 ## 2) Generar certificado para IP LAN
-Reemplaza `192.168.18.117` por la IP real del servidor del cliente.
+Reemplaza `192.168.100.1` por la IP real del servidor del cliente.
 
 ```powershell
 New-Item -ItemType Directory -Path C:\apps\desarrollo-megarosita\certs -Force | Out-Null
@@ -35,7 +35,7 @@ New-Item -ItemType Directory -Path C:\apps\desarrollo-megarosita\certs -Force | 
 mkcert `
   -cert-file C:\apps\desarrollo-megarosita\certs\lan-cert.pem `
   -key-file  C:\apps\desarrollo-megarosita\certs\lan-key.pem `
-  192.168.18.117 localhost 127.0.0.1 ::1
+  192.168.100.1 localhost 127.0.0.1 ::1
 ```
 
 Exporta CA para instalar en moviles/tablets si aparece advertencia SSL:
@@ -78,9 +78,12 @@ Archivo: `megarositabackend\src\Api\appsettings.json`
 ```json
 "Cors": {
   "AllowedOrigins": [
-    "https://192.168.18.117:4173",
+    "https://192.168.100.1:4173",
+    "https://192.168.100.1:5173",
     "https://localhost:4173",
-    "http://localhost:4173"
+    "http://localhost:4173",
+    "https://localhost:5173",
+    "http://localhost:5173"
   ]
 }
 ```
@@ -91,7 +94,7 @@ Reemplaza IP por la del servidor.
 Archivo: `megarositafrontend\.env`
 
 ```env
-VITE_API_BASE_URL=https://192.168.18.117:5001/api/v1
+VITE_API_BASE_URL=https://192.168.100.1:5001/api/v1
 VITE_HTTPS_CERT_PATH=../certs/lan-cert.pem
 VITE_HTTPS_KEY_PATH=../certs/lan-key.pem
 ```
@@ -126,8 +129,8 @@ Invoke-WebRequest https://127.0.0.1:4173 -UseBasicParsing
 ```
 
 Desde otro equipo de la LAN:
-- `https://192.168.18.117:4173`
-- `https://192.168.18.117:5001/swagger/index.html`
+- `https://192.168.100.1:4173`
+- `https://192.168.100.1:5001/swagger/index.html`
 
 ## 9) Si moviles/tablets muestran "No es seguro"
 Instalar `mkcert-rootCA.crt` en cada dispositivo como certificado de confianza.
@@ -143,4 +146,3 @@ mkcert `
 ```
 
 Luego reiniciar backend y frontend.
-

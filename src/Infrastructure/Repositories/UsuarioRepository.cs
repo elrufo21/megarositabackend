@@ -26,7 +26,16 @@ public class UsuarioRepository : IUsuario
     public async Task<AuthResponseA> LoginAsync(EUser loginUser, CancellationToken cancellationToken = default)
     {
         var data = $"{loginUser.Email}|{loginUser.Password}|";
-        var result = await _accesoDatos.EjecutarComandoAsync("uspValidaUsuario", "@Data", data, cancellationToken);
+        var result = await _accesoDatos.EjecutarComandoConFallbackAsync(
+            new (string StoredProcedure, string ParameterName)[]
+            {
+                ("web.uspValidaUsuario_web", "@Data"),
+                ("web.uspValidaUsuario", "@Data"),
+                ("dbo.uspValidaUsuario", "@Data"),
+                ("uspValidaUsuario", "@Data")
+            },
+            data,
+            cancellationToken);
 
         if (string.IsNullOrWhiteSpace(result))
         {
