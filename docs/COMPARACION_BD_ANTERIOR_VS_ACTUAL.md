@@ -70,7 +70,7 @@
 
 ## Cambios puntuales relevantes identificados
 - `TABLE dbo.Compania`: se agrega columna `BoletaPorLote` (bit not null) y default `DF_Compania_BoletaPorLote = 1`.
-- `TABLE dbo.NotaPedido`: se agregan columnas `EntidadBancaria`, `NroOperacion`, `Efectivo`, `Deposito`.
+- `TABLE dbo.NotaPedido`: en la comparacion inicial aparecian columnas extra de pago bancario; en la version de convivencia vigente **no se agregan** y se mantiene el esquema desktop.
 - `PROCEDURE dbo.uspinsertarNotaB`: cambia `INSERT INTO NotaPedido` a insercion con lista explicita de columnas (mas robusto ante cambios de esquema).
 - `PROCEDURE dbo.uspValidaUsuario`: reescritura importante del procedimiento (manejo de entrada, salida y campos retornados).
 - Nuevos procedimientos para notas/productos: `listaNotaPedido`, `listarProductos`, `uspEditarNotaPedidowEB`, `uspObtenerNotaPedidoById`, `uspObtenerNotaPedidoDetalles`.

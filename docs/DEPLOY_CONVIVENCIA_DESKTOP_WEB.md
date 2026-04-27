@@ -5,12 +5,9 @@
 
 ## Que hace el script
 - Crea el esquema `web` para aislar procedimientos del backend.
-- Agrega columnas aditivas (sin borrar ni renombrar):
+- Agrega solo columna aditiva en `Compania` (sin borrar ni renombrar):
   - `dbo.Compania.BoletaPorLote`
-  - `dbo.NotaPedido.EntidadBancaria`
-  - `dbo.NotaPedido.NroOperacion`
-  - `dbo.NotaPedido.Efectivo`
-  - `dbo.NotaPedido.Deposito`
+- `dbo.NotaPedido` se mantiene con su esquema desktop (`NotaFormaPago`, `NotaNumero`, etc.).
 - No modifica los procedimientos legacy de escritorio en `dbo` (incluido `dbo.uspinsertarNotaB`).
 - Crea procedimientos web con sufijo `_web` en esquema `web` (por ejemplo `web.uspinsertarNotaB_web`).
 - Crea wrappers de compatibilidad en `web` sin sufijo y un wrapper `dbo.uspinsertarNotaB_web`.
@@ -39,10 +36,6 @@ sqlcmd -S TU_SERVIDOR -d TU_BASE -U TU_USUARIO -P TU_PASSWORD -i "C:\ruta\al\rep
 ## Validaciones minimas post-ejecucion
 ```sql
 SELECT COL_LENGTH('dbo.Compania','BoletaPorLote') AS BoletaPorLote;
-SELECT COL_LENGTH('dbo.NotaPedido','EntidadBancaria') AS EntidadBancaria;
-SELECT COL_LENGTH('dbo.NotaPedido','NroOperacion') AS NroOperacion;
-SELECT COL_LENGTH('dbo.NotaPedido','Efectivo') AS Efectivo;
-SELECT COL_LENGTH('dbo.NotaPedido','Deposito') AS Deposito;
 ```
 
 ```sql

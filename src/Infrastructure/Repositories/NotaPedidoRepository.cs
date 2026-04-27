@@ -600,10 +600,6 @@ public class NotaPedidoRepository : INotaPedido
                                     NotaGanancia,
                                     ICBPER,
                                     CajaId,
-                                    EntidadBancaria,
-                                    NroOperacion,
-                                    Efectivo,
-                                    Deposito,
                                     (
                                         SELECT TOP (1) d.EstadoSunat
                                         FROM DocumentoVenta d
@@ -666,10 +662,6 @@ public class NotaPedidoRepository : INotaPedido
                                        NotaGanancia,
                                        ICBPER,
                                        CajaId,
-                                       EntidadBancaria,
-                                       NroOperacion,
-                                       Efectivo,
-                                       Deposito,
                                        (
                                            SELECT TOP (1) d.EstadoSunat
                                            FROM DocumentoVenta d
@@ -710,10 +702,6 @@ public class NotaPedidoRepository : INotaPedido
                                     NotaGanancia,
                                     ICBPER,
                                     CajaId,
-                                    EntidadBancaria,
-                                    NroOperacion,
-                                    Efectivo,
-                                    Deposito,
                                     EstadoSunat
                              FROM Notas
                              WHERE rn BETWEEN @StartRow AND @EndRow
@@ -875,11 +863,7 @@ public class NotaPedidoRepository : INotaPedido
                                            NotaNumero = @NotaNumero,
                                            NotaGanancia = @NotaGanancia,
                                            ICBPER = @ICBPER,
-                                           CajaId = @CajaId,
-                                           EntidadBancaria = @EntidadBancaria,
-                                           NroOperacion = @NroOperacion,
-                                           Efectivo = @Efectivo,
-                                           Deposito = @Deposito
+                                           CajaId = @CajaId
                                        WHERE NotaId = @NotaId";
 
             await using var cmd = new SqlCommand(sqlUpdate, con, tx);
@@ -894,14 +878,12 @@ public class NotaPedidoRepository : INotaPedido
                                      NotaFechaPago, NotaDireccion, NotaTelefono, NotaSubtotal, NotaMovilidad,
                                      NotaDescuento, NotaTotal, NotaAcuenta, NotaSaldo, NotaAdicional, NotaTarjeta,
                                      NotaPagar, NotaEstado, CompaniaId, NotaEntrega, ModificadoPor, FechaEdita,
-                                     NotaConcepto, NotaSerie, NotaNumero, NotaGanancia, ICBPER, CajaId,
-                                     EntidadBancaria, NroOperacion, Efectivo, Deposito)
+                                     NotaConcepto, NotaSerie, NotaNumero, NotaGanancia, ICBPER, CajaId)
                                VALUES (@NotaDocu, @ClienteId, @NotaFecha, @NotaUsuario, @NotaFormaPago, @NotaCondicion,
                                        @NotaFechaPago, @NotaDireccion, @NotaTelefono, @NotaSubtotal, @NotaMovilidad,
                                        @NotaDescuento, @NotaTotal, @NotaAcuenta, @NotaSaldo, @NotaAdicional, @NotaTarjeta,
                                        @NotaPagar, @NotaEstado, @CompaniaId, @NotaEntrega, @ModificadoPor, @FechaEdita,
-                                       @NotaConcepto, @NotaSerie, @NotaNumero, @NotaGanancia, @ICBPER, @CajaId,
-                                       @EntidadBancaria, @NroOperacion, @Efectivo, @Deposito);
+                                       @NotaConcepto, @NotaSerie, @NotaNumero, @NotaGanancia, @ICBPER, @CajaId);
                                SELECT SCOPE_IDENTITY();";
 
         await using var insertCmd = new SqlCommand(sqlInsert, con, tx);
@@ -998,14 +980,13 @@ public class NotaPedidoRepository : INotaPedido
         AddParam(cmd, "@FechaEdita", notaPedido.FechaEdita);
         AddParam(cmd, "@NotaConcepto", notaPedido.NotaConcepto);
         AddParam(cmd, "@NotaSerie", notaPedido.NotaSerie);
-        AddParam(cmd, "@NotaNumero", notaPedido.NotaNumero);
+        var numeroOperacion = string.IsNullOrWhiteSpace(notaPedido.NotaNumero)
+            ? notaPedido.NroOperacion
+            : notaPedido.NotaNumero;
+        AddParam(cmd, "@NotaNumero", numeroOperacion);
         AddParam(cmd, "@NotaGanancia", notaPedido.NotaGanancia);
         AddParam(cmd, "@ICBPER", notaPedido.ICBPER);
         AddParam(cmd, "@CajaId", notaPedido.CajaId);
-        AddParam(cmd, "@EntidadBancaria", notaPedido.EntidadBancaria);
-        AddParam(cmd, "@NroOperacion", notaPedido.NroOperacion);
-        AddParam(cmd, "@Efectivo", notaPedido.Efectivo);
-        AddParam(cmd, "@Deposito", notaPedido.Deposito);
     }
 
     private static void AddParam(SqlCommand cmd, string name, object? value)
@@ -1044,13 +1025,10 @@ public class NotaPedidoRepository : INotaPedido
             NotaConcepto = reader["NotaConcepto"].ToString(),
             NotaSerie = reader["NotaSerie"].ToString(),
             NotaNumero = reader["NotaNumero"].ToString(),
+            NroOperacion = reader["NotaNumero"].ToString(),
             NotaGanancia = reader["NotaGanancia"] == DBNull.Value ? null : Convert.ToDecimal(reader["NotaGanancia"]),
             ICBPER = reader["ICBPER"] == DBNull.Value ? null : Convert.ToDecimal(reader["ICBPER"]),
             CajaId = ToNullableInt(reader["CajaId"]),
-            EntidadBancaria = reader["EntidadBancaria"].ToString(),
-            NroOperacion = reader["NroOperacion"].ToString(),
-            Efectivo = reader["Efectivo"] == DBNull.Value ? null : Convert.ToDecimal(reader["Efectivo"]),
-            Deposito = reader["Deposito"] == DBNull.Value ? null : Convert.ToDecimal(reader["Deposito"]),
             EstadoSunat = reader["EstadoSunat"] == DBNull.Value ? null : reader["EstadoSunat"].ToString()
         };
     }

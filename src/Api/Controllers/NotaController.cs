@@ -1637,7 +1637,9 @@ public class NotaController : ControllerBase
         var pagar = nota.NotaPagar ?? total;
         var ganancia = nota.NotaGanancia ?? 0m;
         var xserie = nota.NotaSerie ?? string.Empty;
-        var numero = nota.NotaNumero ?? string.Empty;
+        var numero = string.IsNullOrWhiteSpace(nota.NotaNumero)
+            ? (nota.NroOperacion ?? string.Empty)
+            : nota.NotaNumero;
         // Defaults for uspinsertarNotaB fields not present in NotaPedido payloads
         var docuAdicional = 0m;
         var docuHash = string.Empty;
@@ -1861,7 +1863,7 @@ public class NotaController : ControllerBase
         var entrega = GetFirstString(res, "Entrega", "NotaEntrega");
         var concepto = GetFirstString(res, "Concepto", "NotaConcepto");
         var serie = GetFirstString(res, "NotaSerie", "Serie");
-        var numero = GetFirstString(res, "NotaNumero", "Numero");
+        var numero = GetFirstString(res, "NotaNumero", "Numero", "NroOperacion");
         var ganancia = GetFirstDecimal(res, 0m, "Ganancia", "NotaGanancia");
         var letra = Letras.enletras(total.ToString("N2")) + "  SOLES";
         var docuAdicional = GetFirstDecimal(res, 0m, "DocuAdicional", "AdicionalDoc");

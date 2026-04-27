@@ -55,21 +55,11 @@ END
 
 IF @SafeAlterNotaPedido = 1
 BEGIN
-    IF COL_LENGTH('dbo.NotaPedido', 'EntidadBancaria') IS NULL
-        ALTER TABLE dbo.NotaPedido ADD EntidadBancaria varchar(80) NULL;
-
-    IF COL_LENGTH('dbo.NotaPedido', 'NroOperacion') IS NULL
-        ALTER TABLE dbo.NotaPedido ADD NroOperacion varchar(80) NULL;
-
-    IF COL_LENGTH('dbo.NotaPedido', 'Efectivo') IS NULL
-        ALTER TABLE dbo.NotaPedido ADD Efectivo decimal(18,2) NULL;
-
-    IF COL_LENGTH('dbo.NotaPedido', 'Deposito') IS NULL
-        ALTER TABLE dbo.NotaPedido ADD Deposito decimal(18,2) NULL;
+    PRINT 'INFO: NotaPedido se mantiene con esquema desktop (sin columnas adicionales de pago bancario).';
 END
 ELSE
 BEGIN
-    PRINT 'WARN: Se detecto INSERT ... VALUES sobre NotaPedido. Se omiten cambios de columnas para no romper escritorio.';
+    PRINT 'WARN: Se detecto INSERT ... VALUES sobre NotaPedido. No se realizan cambios de columnas (compatibilidad desktop).';
 END
 GO
 
@@ -158,11 +148,6 @@ BEGIN
     DECLARE @FechaFinExclusiva DATE;
     SET @FechaFinExclusiva = DATEADD(DAY, 1, @FechaFin);
 
-    DECLARE @ExprEntidad NVARCHAR(200) = CASE WHEN COL_LENGTH('dbo.NotaPedido', 'EntidadBancaria') IS NULL THEN '''''' ELSE 'ISNULL(n.EntidadBancaria, '''')' END;
-    DECLARE @ExprNroOperacion NVARCHAR(200) = CASE WHEN COL_LENGTH('dbo.NotaPedido', 'NroOperacion') IS NULL THEN '''''' ELSE 'ISNULL(n.NroOperacion, '''')' END;
-    DECLARE @ExprEfectivo NVARCHAR(300) = CASE WHEN COL_LENGTH('dbo.NotaPedido', 'Efectivo') IS NULL THEN '''''' ELSE 'ISNULL(CONVERT(VARCHAR(50), CAST(n.Efectivo AS MONEY), 1), '''')' END;
-    DECLARE @ExprDeposito NVARCHAR(300) = CASE WHEN COL_LENGTH('dbo.NotaPedido', 'Deposito') IS NULL THEN '''''' ELSE 'ISNULL(CONVERT(VARCHAR(50), CAST(n.Deposito AS MONEY), 1), '''')' END;
-
     DECLARE @Sql NVARCHAR(MAX) = N'
     SELECT
         ISNULL(
@@ -210,11 +195,7 @@ BEGIN
                             ISNULL(n.NotaNumero, '''') + ''|'' +
                             ISNULL(CONVERT(VARCHAR(50), CAST(n.NotaGanancia AS MONEY), 1), '''') + ''|'' +
                             ISNULL(CONVERT(VARCHAR(50), CAST(n.ICBPER AS MONEY), 1), '''') + ''|'' +
-                            ISNULL(n.CajaId, '''') + ''|'' +
-                            ' + @ExprEntidad + N' + ''|'' +
-                            ' + @ExprNroOperacion + N' + ''|'' +
-                            ' + @ExprEfectivo + N' + ''|'' +
-                            ' + @ExprDeposito + N'
+                            ISNULL(n.CajaId, '''')
                         FROM dbo.NotaPedido n
                         LEFT JOIN dbo.Cliente c
                             ON c.ClienteId = n.ClienteId
@@ -400,11 +381,6 @@ AS
 BEGIN
     SET NOCOUNT ON;
 
-    DECLARE @ExprEntidad NVARCHAR(200) = CASE WHEN COL_LENGTH('dbo.NotaPedido', 'EntidadBancaria') IS NULL THEN 'CAST(NULL AS VARCHAR(80))' ELSE 'n.EntidadBancaria' END;
-    DECLARE @ExprNroOperacion NVARCHAR(200) = CASE WHEN COL_LENGTH('dbo.NotaPedido', 'NroOperacion') IS NULL THEN 'CAST(NULL AS VARCHAR(80))' ELSE 'n.NroOperacion' END;
-    DECLARE @ExprEfectivo NVARCHAR(200) = CASE WHEN COL_LENGTH('dbo.NotaPedido', 'Efectivo') IS NULL THEN 'CAST(NULL AS DECIMAL(18,2))' ELSE 'n.Efectivo' END;
-    DECLARE @ExprDeposito NVARCHAR(200) = CASE WHEN COL_LENGTH('dbo.NotaPedido', 'Deposito') IS NULL THEN 'CAST(NULL AS DECIMAL(18,2))' ELSE 'n.Deposito' END;
-
     DECLARE @Sql NVARCHAR(MAX) = N'
     SELECT TOP (1)
         n.NotaId,
@@ -437,10 +413,6 @@ BEGIN
         n.NotaGanancia,
         n.ICBPER,
         n.CajaId,
-        ' + @ExprEntidad + N' AS EntidadBancaria,
-        ' + @ExprNroOperacion + N' AS NroOperacion,
-        ' + @ExprEfectivo + N' AS Efectivo,
-        ' + @ExprDeposito + N' AS Deposito,
         (
             SELECT TOP (1) d.EstadoSunat
             FROM dbo.DocumentoVenta d WITH (NOLOCK)

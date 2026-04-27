@@ -90,9 +90,12 @@ public static class Cadena
             campos = registros[i].Split('|');
             if (campos.Length == 0 || campos[0] == "~") break;
 
-            // Formato completo actual de dbo.listaNotaPedido:
-            // 0..43 (44 campos) + opcional 44 EstadoSunat
-            if (campos.Length >= 44)
+            // Formato completo base de dbo.listaNotaPedido:
+            // 0..39 (40 campos, termina en CajaId)
+            // Compatibilidad legacy opcional:
+            // 40..43 => EntidadBancaria, NroOperacion, Efectivo, Deposito
+            // 44      => EstadoSunat
+            if (campos.Length >= 40)
             {
                 lista.Add(new EListaNota
                 {
@@ -145,11 +148,11 @@ public static class Cadena
                     NotaGanancia = GetCampo(campos, 37),
                     Icbper = GetCampo(campos, 38),
                     CajaId = GetCampo(campos, 39),
-                    EntidadBancaria = GetCampo(campos, 40),
-                    NroOperacion = GetCampo(campos, 41),
-                    Efectivo = GetCampo(campos, 42),
-                    Deposito = GetCampo(campos, 43),
-                    EstadoSunat = GetCampo(campos, 44)
+                    EntidadBancaria = campos.Length >= 41 ? GetCampo(campos, 40) : string.Empty,
+                    NroOperacion = campos.Length >= 42 ? GetCampo(campos, 41) : GetCampo(campos, 36),
+                    Efectivo = campos.Length >= 43 ? GetCampo(campos, 42) : string.Empty,
+                    Deposito = campos.Length >= 44 ? GetCampo(campos, 43) : string.Empty,
+                    EstadoSunat = campos.Length >= 45 ? GetCampo(campos, 44) : string.Empty
                 });
                 continue;
             }
