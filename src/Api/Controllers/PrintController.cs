@@ -13,7 +13,9 @@ namespace Ecommerce.Api.Controllers
             if (file == null || file.Length == 0)
                 return BadRequest(new { ok = false, message = "No se recibió el PDF" });
 
-            string printerName = "EPSON TM-T(203dpi) Receipt";
+            //string printerName = "EPSON TM-T(203dpi) Receipt";
+            string printerName = "EPSON TM-T20IV Receipt";
+            
             string sumatraPath = @"C:\app\SumatraPDF\SumatraPDF.exe";
 
             string tempFolder = Path.Combine(Path.GetTempPath(), "PrintTemp");
@@ -31,7 +33,7 @@ namespace Ecommerce.Api.Controllers
                 var psi = new ProcessStartInfo
                 {
                     FileName = sumatraPath,
-                    Arguments = $"-print-to \"{printerName}\" -silent \"{tempFile}\"",
+                    Arguments = $"-print-to \"{printerName}\" -print-settings \"noscale,portrait\" -silent \"{tempFile}\"",
                     CreateNoWindow = true,
                     UseShellExecute = false,
                     WindowStyle = ProcessWindowStyle.Hidden
