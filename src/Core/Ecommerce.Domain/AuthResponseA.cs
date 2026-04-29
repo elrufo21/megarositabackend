@@ -1,7 +1,7 @@
 namespace Ecommerce.Domain;
 public class AuthResponseA
 {
-   public string? Id { get; set; }
+    public string? Id { get; set; }
     public string? PersonalId { get; set; }
     public string? Area { get; set; }
     public string? Usuario { get; set; }
@@ -20,6 +20,12 @@ public class AuthResponseA
     public string? Entorno { get; set; }
     public string? CompaniaTelefono { get; set; }
     public bool BoletaPorLote { get; set; } = true;
+    public string? EfectivoMax { get; set; }
+    public string? TarjetaPorcentaje { get; set; }
+    public string? Icbper { get; set; }
+    public string? CorreoSgo { get; set; }
+    public string? PasswordCorreo { get; set; }
+    public string? CorreosAdmin { get; set; }
     //public string? RUC { get; set; }
     //public string? UsuarioSerie { get; set; }
     //public string? Avatar { get; set; }
