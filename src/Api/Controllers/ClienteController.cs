@@ -29,7 +29,21 @@ public class ClienteController: ControllerBase
     [ProducesResponseType((int)HttpStatusCode.OK)]
     public async Task<IActionResult> EliminarCliente(long id, CancellationToken cancellationToken)
     {
-        return Ok(await _mediator.EliminarAsync(id, cancellationToken));
+        var eliminado = await _mediator.EliminarAsync(id, cancellationToken);
+        if (!eliminado)
+        {
+            return Conflict(new
+            {
+                ok = false,
+                mensaje = "No se pudo eliminar cliente: tiene registros relacionados o no existe."
+            });
+        }
+
+        return Ok(new
+        {
+            ok = true,
+            mensaje = "Cliente eliminado correctamente."
+        });
     }
 
     [AllowAnonymous]

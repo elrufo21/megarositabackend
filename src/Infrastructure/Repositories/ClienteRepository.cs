@@ -33,9 +33,7 @@ public class ClienteRepository : ICliente
     public async Task<bool> EliminarAsync(long id, CancellationToken cancellationToken = default)
     {
         const string sql = """
-            UPDATE Cliente
-            SET ClienteEstado = 'INACTIVO',
-                ClienteFecha = GETDATE()
+            DELETE FROM Cliente
             WHERE ClienteId = @Id;
             """;
         await using var con = new SqlConnection(_connectionString);
@@ -46,8 +44,16 @@ public class ClienteRepository : ICliente
         };
         cmd.Parameters.AddWithValue("@Id", id);
         await con.OpenAsync(cancellationToken);
-        var rows = await cmd.ExecuteNonQueryAsync(cancellationToken);
-        return rows > 0;
+        try
+        {
+            var rows = await cmd.ExecuteNonQueryAsync(cancellationToken);
+            return rows > 0;
+        }
+        catch (SqlException ex) when (ex.Number == 547)
+        {
+            // FK violation: cliente en uso por NotaPedido/DocumentoVenta u otras tablas.
+            return false;
+        }
     }
 
     public async Task<IReadOnlyList<Cliente>> ListarAsync(string? estado = "ACTIVO", int page = 1, int pageSize = 50, CancellationToken cancellationToken = default)

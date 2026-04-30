@@ -1,4 +1,5 @@
 using Ecommerce.Domain;
+using System.Net;
 
 namespace Ecommerce.Infrastructure.Persistence;
 
@@ -83,7 +84,7 @@ public static class Cadena
         string[] campos;
 
         static string GetCampo(string[] values, int index)
-            => index >= 0 && index < values.Length ? values[index] : string.Empty;
+            => index >= 0 && index < values.Length ? WebUtility.HtmlDecode(values[index]) : string.Empty;
 
         for (int i = 0; i < nRegistros; i++)
         {
@@ -95,8 +96,35 @@ public static class Cadena
             // Compatibilidad legacy opcional:
             // 40..43 => EntidadBancaria, NroOperacion, Efectivo, Deposito
             // 44      => EstadoSunat
+            // Variante tolerada: EstadoSunat puede venir como ultimo campo
+            // aun cuando falten algunos (o todos) los campos 40..43.
             if (campos.Length >= 40)
             {
+                var entidadBancaria = string.Empty;
+                var nroOperacion = GetCampo(campos, 36);
+                var efectivo = string.Empty;
+                var deposito = string.Empty;
+                var estadoSunat = string.Empty;
+
+                if (campos.Length >= 45)
+                {
+                    entidadBancaria = GetCampo(campos, 40);
+                    nroOperacion = GetCampo(campos, 41);
+                    efectivo = GetCampo(campos, 42);
+                    deposito = GetCampo(campos, 43);
+                    estadoSunat = GetCampo(campos, 44);
+                }
+                else if (campos.Length >= 41)
+                {
+                    // Fallback: si no vienen todos los opcionales,
+                    // asumir que el ultimo corresponde a EstadoSunat.
+                    estadoSunat = GetCampo(campos, campos.Length - 1);
+
+                    if (campos.Length >= 42) entidadBancaria = GetCampo(campos, 40);
+                    if (campos.Length >= 43) nroOperacion = GetCampo(campos, 41);
+                    if (campos.Length >= 44) efectivo = GetCampo(campos, 42);
+                }
+
                 lista.Add(new EListaNota
                 {
                     NotaId = GetCampo(campos, 0),
@@ -148,11 +176,11 @@ public static class Cadena
                     NotaGanancia = GetCampo(campos, 37),
                     Icbper = GetCampo(campos, 38),
                     CajaId = GetCampo(campos, 39),
-                    EntidadBancaria = campos.Length >= 41 ? GetCampo(campos, 40) : string.Empty,
-                    NroOperacion = campos.Length >= 42 ? GetCampo(campos, 41) : GetCampo(campos, 36),
-                    Efectivo = campos.Length >= 43 ? GetCampo(campos, 42) : string.Empty,
-                    Deposito = campos.Length >= 44 ? GetCampo(campos, 43) : string.Empty,
-                    EstadoSunat = campos.Length >= 45 ? GetCampo(campos, 44) : string.Empty
+                    EntidadBancaria = entidadBancaria,
+                    NroOperacion = nroOperacion,
+                    Efectivo = efectivo,
+                    Deposito = deposito,
+                    EstadoSunat = estadoSunat
                 });
                 continue;
             }

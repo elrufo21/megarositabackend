@@ -15549,6 +15549,7 @@ insert into NotaPedido values(@NotaDocu,@ClienteId,GETDATE(),@NotaUsuario,
 set @NotaId=(select @@IDENTITY)      
 if @NotaDocu='BOLETA'      
 begin      
+set @EstadoSunat='PENDIENTE'      
 insert into DocumentoVenta values      
 (@CompaniaId,@NotaId,'BOLETA',@cod,@ClienteId,GETDATE(),      
 GETDATE(),@NotaCondicion,1,GETDATE(),cast(convert(date,GETDATE()) as varchar(10)),@Letra,@DocuSubtotal,      
@@ -18610,7 +18611,7 @@ BEGIN
                             ISNULL(c.ClienteDespacho, '''') + ''|'' +
                             ISNULL(c.ClienteUsuario, '''') + ''|'' +
                             ISNULL(CONVERT(VARCHAR(10), c.ClienteFecha, 103), '''') + ''|'' +
-                            ISNULL(CONVERT(VARCHAR(10), n.NotaFecha, 103), '''') + ''|'' +
+                            ISNULL(CONVERT(VARCHAR(10), n.NotaFecha, 103) + '' '' + CONVERT(VARCHAR(8), n.NotaFecha, 108), '''') + ''|'' +
                             ISNULL(n.NotaUsuario, '''') + ''|'' +
                             ISNULL(n.NotaFormaPago, '''') + ''|'' +
                             ISNULL(n.NotaCondicion, '''') + ''|'' +
@@ -18636,7 +18637,20 @@ BEGIN
                             ISNULL(n.NotaNumero, '''') + ''|'' +
                             ISNULL(CONVERT(VARCHAR(50), CAST(n.NotaGanancia AS MONEY), 1), '''') + ''|'' +
                             ISNULL(CONVERT(VARCHAR(50), CAST(n.ICBPER AS MONEY), 1), '''') + ''|'' +
-                            ISNULL(n.CajaId, '''')
+                            ISNULL(n.CajaId, '''') + ''|'' +
+                            '''' + ''|'' +
+                            '''' + ''|'' +
+                            '''' + ''|'' +
+                            '''' + ''|'' +
+                            ISNULL(
+                                (
+                                    SELECT TOP (1) d.EstadoSunat
+                                    FROM dbo.DocumentoVenta d WITH (NOLOCK)
+                                    WHERE d.NotaId = n.NotaId
+                                    ORDER BY d.DocuId DESC
+                                ),
+                                ''''
+                            )
                         FROM dbo.NotaPedido n
                         LEFT JOIN dbo.Cliente c
                             ON c.ClienteId = n.ClienteId
