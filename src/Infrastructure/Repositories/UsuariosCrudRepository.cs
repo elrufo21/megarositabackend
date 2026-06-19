@@ -53,26 +53,31 @@ public class UsuariosCrudRepository : IUsuariosCrud
         (page, pageSize) = NormalizePagination(page, pageSize);
 
         const string sql = """
-            SELECT U.UsuarioID,
-                   U.PersonalId,
-                   CONCAT(ISNULL(P.PersonalNombres, ''), ' ', ISNULL(P.PersonalApellidos, '')) AS Nombre,
-                   U.UsuarioAlias,
-                   U.UsuarioFechaReg AS Fecha,
-                   U.UsuarioEstado AS Estado,
-                   A.AreaNombre AS Area
-            FROM Usuarios U
-            LEFT JOIN Personal P ON P.PersonalId = U.PersonalId
-            LEFT JOIN Area A ON A.AreaId = P.AreaId
-            WHERE (@Estado IS NULL OR U.UsuarioEstado = @Estado)
-            ORDER BY U.UsuarioID DESC
-            OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY;
+            ;WITH Paged AS (
+                SELECT U.UsuarioID,
+                       U.PersonalId,
+                       CONCAT(ISNULL(P.PersonalNombres, ''), ' ', ISNULL(P.PersonalApellidos, '')) AS Nombre,
+                       U.UsuarioAlias,
+                       U.UsuarioFechaReg AS Fecha,
+                       U.UsuarioEstado AS Estado,
+                       A.AreaNombre AS Area,
+                       ROW_NUMBER() OVER (ORDER BY U.UsuarioID DESC) AS RowNum
+                FROM Usuarios U
+                LEFT JOIN Personal P ON P.PersonalId = U.PersonalId
+                LEFT JOIN Area A ON A.AreaId = P.AreaId
+                WHERE (@Estado IS NULL OR U.UsuarioEstado = @Estado)
+            )
+            SELECT UsuarioID, PersonalId, Nombre, UsuarioAlias, Fecha, Estado, Area
+            FROM Paged
+            WHERE RowNum BETWEEN @StartRow AND @EndRow
+            ORDER BY RowNum;
             """;
 
         await using var con = new SqlConnection(_connectionString);
         await using var cmd = new SqlCommand(sql, con);
         cmd.Parameters.AddWithValue("@Estado", (object?)estado ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@Offset", (page - 1) * pageSize);
-        cmd.Parameters.AddWithValue("@PageSize", pageSize);
+        cmd.Parameters.AddWithValue("@StartRow", ((page - 1) * pageSize) + 1);
+        cmd.Parameters.AddWithValue("@EndRow", page * pageSize);
         await con.OpenAsync(cancellationToken);
         await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
 
@@ -114,35 +119,58 @@ public class UsuariosCrudRepository : IUsuariosCrud
         (page, pageSize) = NormalizePagination(page, pageSize);
 
         const string sql = """
-            SELECT U.UsuarioID,
-                   U.PersonalId,
-                   U.UsuarioAlias,
-                   U.UsuarioFechaReg AS Fecha,
-                   U.UsuarioEstado,
-                   P.PersonalId AS PersonalIdPersonal,
-                   P.PersonalNombres,
-                   P.PersonalApellidos,
-                   P.AreaId,
-                   P.PersonalCodigo,
-                   P.PersonalNacimiento,
-                   P.PersonalIngreso,
-                   P.PersonalDNI,
-                   P.PersonalDireccion,
-                   P.PersonalTelefono,
-                   P.PersonalEmail,
-                   P.PersonalEstado,
-                   P.PersonalImagen,
-                   P.CompaniaId
-            FROM Usuarios U
-            LEFT JOIN Personal P ON U.PersonalId = P.PersonalId
-            ORDER BY U.UsuarioID DESC
-            OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY;
+            ;WITH Paged AS (
+                SELECT U.UsuarioID,
+                       U.PersonalId,
+                       U.UsuarioAlias,
+                       U.UsuarioFechaReg AS Fecha,
+                       U.UsuarioEstado,
+                       P.PersonalId AS PersonalIdPersonal,
+                       P.PersonalNombres,
+                       P.PersonalApellidos,
+                       P.AreaId,
+                       P.PersonalCodigo,
+                       P.PersonalNacimiento,
+                       P.PersonalIngreso,
+                       P.PersonalDNI,
+                       P.PersonalDireccion,
+                       P.PersonalTelefono,
+                       P.PersonalEmail,
+                       P.PersonalEstado,
+                       P.PersonalImagen,
+                       P.CompaniaId,
+                       ROW_NUMBER() OVER (ORDER BY U.UsuarioID DESC) AS RowNum
+                FROM Usuarios U
+                LEFT JOIN Personal P ON U.PersonalId = P.PersonalId
+            )
+            SELECT UsuarioID,
+                   PersonalId,
+                   UsuarioAlias,
+                   Fecha,
+                   UsuarioEstado,
+                   PersonalIdPersonal,
+                   PersonalNombres,
+                   PersonalApellidos,
+                   AreaId,
+                   PersonalCodigo,
+                   PersonalNacimiento,
+                   PersonalIngreso,
+                   PersonalDNI,
+                   PersonalDireccion,
+                   PersonalTelefono,
+                   PersonalEmail,
+                   PersonalEstado,
+                   PersonalImagen,
+                   CompaniaId
+            FROM Paged
+            WHERE RowNum BETWEEN @StartRow AND @EndRow
+            ORDER BY RowNum;
             """;
 
         await using var con = new SqlConnection(_connectionString);
         await using var cmd = new SqlCommand(sql, con);
-        cmd.Parameters.AddWithValue("@Offset", (page - 1) * pageSize);
-        cmd.Parameters.AddWithValue("@PageSize", pageSize);
+        cmd.Parameters.AddWithValue("@StartRow", ((page - 1) * pageSize) + 1);
+        cmd.Parameters.AddWithValue("@EndRow", page * pageSize);
         await con.OpenAsync(cancellationToken);
         await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
 

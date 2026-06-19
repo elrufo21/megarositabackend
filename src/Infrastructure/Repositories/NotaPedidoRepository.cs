@@ -778,7 +778,7 @@ public class NotaPedidoRepository : INotaPedido
         return lista;
     }
 
-    public async Task<IReadOnlyList<EListaNota>> ListarAsync(DateTime fechaInicio, DateTime fechaFin, int page = 1, int pageSize = 50, CancellationToken cancellationToken = default)
+    public async Task<NotaListadoPaginadoResponse> ListarAsync(DateTime fechaInicio, DateTime fechaFin, int page = 1, int pageSize = 50, CancellationToken cancellationToken = default)
     {
         (page, pageSize) = NormalizePagination(page, pageSize);
         var attempts = new[]
@@ -823,11 +823,29 @@ public class NotaPedidoRepository : INotaPedido
 
         if (string.IsNullOrWhiteSpace(result))
         {
-            return new List<EListaNota>();
+            return new NotaListadoPaginadoResponse
+            {
+                Page = page,
+                PageSize = pageSize,
+                Total = 0,
+                TotalPages = 0,
+                Items = Array.Empty<EListaNota>()
+            };
         }
 
         var lista = Cadena.AlistaCamposNota(result);
-        return lista.Skip((page - 1) * pageSize).Take(pageSize).ToList();
+        var total = lista.Count;
+        var totalPages = total == 0 ? 0 : (int)Math.Ceiling(total / (double)pageSize);
+        var items = lista.Skip((page - 1) * pageSize).Take(pageSize).ToList();
+
+        return new NotaListadoPaginadoResponse
+        {
+            Page = page,
+            PageSize = pageSize,
+            Total = total,
+            TotalPages = totalPages,
+            Items = items
+        };
     }
 
     private static async Task<long> InsertOrUpdateNotaAsync(NotaPedido notaPedido, SqlConnection con, SqlTransaction tx, CancellationToken cancellationToken)

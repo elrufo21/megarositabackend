@@ -45,11 +45,21 @@ public class CuentaProveedorRepository : ICuentaProveedor
         (page, pageSize) = NormalizePagination(page, pageSize);
 
         const string sql = """
+            ;WITH Paged AS (
+                SELECT CuentaId,
+                       ProveedorId,
+                       Entidad,
+                       TipoCuenta,
+                       Moneda,
+                       NroCuenta,
+                       ROW_NUMBER() OVER (ORDER BY CuentaId DESC) AS RowNum
+                FROM CuentaProveedor
+                WHERE ProveedorId = @ProveedorId
+            )
             SELECT CuentaId, ProveedorId, Entidad, TipoCuenta, Moneda, NroCuenta
-            FROM CuentaProveedor
-            WHERE ProveedorId = @ProveedorId
-            ORDER BY CuentaId DESC
-            OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY;
+            FROM Paged
+            WHERE RowNum BETWEEN @StartRow AND @EndRow
+            ORDER BY RowNum;
             """;
 
         await using var con = new SqlConnection(_connectionString);
@@ -59,8 +69,8 @@ public class CuentaProveedorRepository : ICuentaProveedor
             CommandType = CommandType.Text
         };
         cmd.Parameters.AddWithValue("@ProveedorId", proveedorId);
-        cmd.Parameters.AddWithValue("@Offset", (page - 1) * pageSize);
-        cmd.Parameters.AddWithValue("@PageSize", pageSize);
+        cmd.Parameters.AddWithValue("@StartRow", ((page - 1) * pageSize) + 1);
+        cmd.Parameters.AddWithValue("@EndRow", page * pageSize);
         await con.OpenAsync(cancellationToken);
         await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
 

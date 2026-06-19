@@ -52,7 +52,7 @@ public interface INotaPedido
         int page = 1,
         int pageSize = 50,
         CancellationToken cancellationToken = default);
-    Task<IReadOnlyList<EListaNota>> ListarAsync(
+    Task<NotaListadoPaginadoResponse> ListarAsync(
         DateTime fechaInicio,
         DateTime fechaFin,
         int page = 1,

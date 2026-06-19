@@ -80,6 +80,31 @@ public class CompaniaController : ControllerBase
     }
 
     [AllowAnonymous]
+    [HttpGet("{id:int}", Name = "GetCompaniaById")]
+    [ProducesResponseType(typeof(Compania), (int)HttpStatusCode.OK)]
+    [ProducesResponseType((int)HttpStatusCode.BadRequest)]
+    [ProducesResponseType((int)HttpStatusCode.NotFound)]
+    public async Task<ActionResult<Compania>> GetCompaniaById(int id, CancellationToken cancellationToken = default)
+    {
+        if (id <= 0)
+        {
+            return BadRequest("Id inválido.");
+        }
+
+        var compania = await _mediator.ObtenerPorIdAsync(id, cancellationToken);
+        if (compania is null)
+        {
+            return NotFound(new
+            {
+                ok = false,
+                mensaje = $"No se encontró la compañía con id {id}."
+            });
+        }
+
+        return Ok(compania);
+    }
+
+    [AllowAnonymous]
     [HttpGet("list", Name = "GetCompaniaList")]
     [ProducesResponseType(typeof(IReadOnlyList<Compania>), (int)HttpStatusCode.OK)]
     public async Task<ActionResult<IReadOnlyList<Compania>>> GetCompaniaList(

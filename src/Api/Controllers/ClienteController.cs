@@ -11,6 +11,7 @@ namespace Ecommerce.Api.Controllers;
 public class ClienteController: ControllerBase
 {
     private readonly ICliente _mediator;
+
     public ClienteController(ICliente mediador)
     {
         _mediator = mediador;
@@ -21,7 +22,18 @@ public class ClienteController: ControllerBase
     [ProducesResponseType((int)HttpStatusCode.OK)]
     public async Task<IActionResult> RegisterCliente([FromBody] Cliente cliente, CancellationToken cancellationToken)
     {
-        return Ok(await _mediator.InsertarAsync(cliente, cancellationToken));
+        var result = await _mediator.InsertarAsync(cliente, cancellationToken);
+
+        if (result.StartsWith("error:", StringComparison.OrdinalIgnoreCase))
+        {
+            return Conflict(new
+            {
+                ok = false,
+                mensaje = result[6..].Trim()
+            });
+        }
+
+        return Ok(result);
     }
     
     [Authorize]
@@ -35,7 +47,7 @@ public class ClienteController: ControllerBase
             return Conflict(new
             {
                 ok = false,
-                mensaje = "No se pudo eliminar cliente: tiene registros relacionados o no existe."
+                mensaje = "No se pudo eliminar el cliente."
             });
         }
 
@@ -50,12 +62,13 @@ public class ClienteController: ControllerBase
     [HttpGet("list", Name = "GetClienteList")]
     [ProducesResponseType(typeof(IReadOnlyList<Cliente>), (int)HttpStatusCode.OK)]
     public async Task<ActionResult<IReadOnlyList<Cliente>>> GetClienteList(
-        [FromQuery] string? estado = "ACTIVO",
+        [FromQuery] string? estado = null,
         [FromQuery] int page = 1,
         [FromQuery] int pageSize = 50,
         CancellationToken cancellationToken = default)
     {
-        return Ok(await _mediator.ListarAsync(estado, page, pageSize, cancellationToken));
+        var estadoFiltro = string.IsNullOrWhiteSpace(estado) ? null : estado.Trim();
+        return Ok(await _mediator.ListarAsync(estadoFiltro, page, pageSize, cancellationToken));
     }
 
     [AllowAnonymous]

@@ -24,6 +24,25 @@ public class ClienteRepository : ICliente
         var movil = (cliente.ClienteMovil ?? cliente.ClienteTelefono)?.Trim();
         var telefono = cliente.ClienteTelefono?.Trim();
         var estado = string.IsNullOrWhiteSpace(cliente.ClienteEstado) ? "ACTIVO" : cliente.ClienteEstado.Trim();
+        var clienteId = cliente.ClienteId;
+        var ruc = NormalizarDocumento(cliente.ClienteRuc);
+        var dni = NormalizarDocumento(cliente.ClienteDni);
+
+        var (rucDuplicado, dniDuplicado) = await ObtenerDuplicadosDocumentoAsync(clienteId, ruc, dni, cancellationToken);
+        if (rucDuplicado && dniDuplicado)
+        {
+            return "error: Ya existe un cliente con el mismo RUC y DNI.";
+        }
+
+        if (rucDuplicado)
+        {
+            return "error: Ya existe un cliente con el mismo RUC.";
+        }
+
+        if (dniDuplicado)
+        {
+            return "error: Ya existe un cliente con el mismo DNI.";
+        }
 
         var data = $"{cliente.ClienteId}|{cliente.ClienteRazon?.Trim()}|{cliente.ClienteRuc?.Trim()}|{cliente.ClienteDni?.Trim()}|{cliente.ClienteDireccion?.Trim()}|{movil}|{telefono}|{cliente.ClienteCorreo?.Trim()}|{estado}|{cliente.ClienteDespacho?.Trim()}|{cliente.ClienteUsuario}";
         var result = await _accesoDatos.EjecutarComandoAsync("insertaClienteLD", "@Columna", data, cancellationToken);
@@ -101,4 +120,66 @@ public class ClienteRepository : ICliente
         return string.IsNullOrWhiteSpace(result) ? string.Empty : result;
     }
 
+    private static string? NormalizarDocumento(string? valor)
+    {
+        var normalizado = valor?.Trim();
+        return string.IsNullOrWhiteSpace(normalizado) ? null : normalizado;
+    }
+
+    private async Task<(bool rucDuplicado, bool dniDuplicado)> ObtenerDuplicadosDocumentoAsync(
+        long clienteId,
+        string? ruc,
+        string? dni,
+        CancellationToken cancellationToken)
+    {
+        if (ruc is null && dni is null)
+        {
+            return (false, false);
+        }
+
+        const string sql = """
+            SELECT ClienteRuc, ClienteDni
+            FROM Cliente
+            WHERE ClienteId <> @ClienteId
+              AND (
+                    (@Ruc IS NOT NULL AND LTRIM(RTRIM(ISNULL(ClienteRuc, ''))) = @Ruc)
+                 OR (@Dni IS NOT NULL AND LTRIM(RTRIM(ISNULL(ClienteDni, ''))) = @Dni)
+              );
+            """;
+
+        await using var con = new SqlConnection(_connectionString);
+        await using var cmd = new SqlCommand(sql, con);
+        cmd.Parameters.AddWithValue("@ClienteId", clienteId);
+        cmd.Parameters.AddWithValue("@Ruc", (object?)ruc ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("@Dni", (object?)dni ?? DBNull.Value);
+
+        await con.OpenAsync(cancellationToken);
+        await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+
+        var rucDuplicado = false;
+        var dniDuplicado = false;
+
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            var rucDb = NormalizarDocumento(reader["ClienteRuc"]?.ToString());
+            var dniDb = NormalizarDocumento(reader["ClienteDni"]?.ToString());
+
+            if (!rucDuplicado && ruc is not null && string.Equals(rucDb, ruc, StringComparison.OrdinalIgnoreCase))
+            {
+                rucDuplicado = true;
+            }
+
+            if (!dniDuplicado && dni is not null && string.Equals(dniDb, dni, StringComparison.OrdinalIgnoreCase))
+            {
+                dniDuplicado = true;
+            }
+
+            if (rucDuplicado && dniDuplicado)
+            {
+                break;
+            }
+        }
+
+        return (rucDuplicado, dniDuplicado);
+    }
 }

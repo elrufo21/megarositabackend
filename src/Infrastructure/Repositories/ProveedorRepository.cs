@@ -63,19 +63,32 @@ public class ProveedorRepository : IProveedor
         (page, pageSize) = NormalizePagination(page, pageSize);
 
         const string sql = """
+            ;WITH Paged AS (
+                SELECT ProveedorId,
+                       ProveedorRazon,
+                       ProveedorRuc,
+                       ProveedorContacto,
+                       ProveedorCelular,
+                       ProveedorTelefono,
+                       ProveedorCorreo,
+                       ProveedorDireccion,
+                       ProveedorEstado,
+                       ROW_NUMBER() OVER (ORDER BY ProveedorId DESC) AS RowNum
+                FROM Proveedor
+                WHERE (@Estado IS NULL OR ProveedorEstado = @Estado)
+            )
             SELECT ProveedorId, ProveedorRazon, ProveedorRuc, ProveedorContacto, ProveedorCelular,
                    ProveedorTelefono, ProveedorCorreo, ProveedorDireccion, ProveedorEstado
-            FROM Proveedor
-            WHERE (@Estado IS NULL OR ProveedorEstado = @Estado)
-            ORDER BY ProveedorId DESC
-            OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY;
+            FROM Paged
+            WHERE RowNum BETWEEN @StartRow AND @EndRow
+            ORDER BY RowNum;
             """;
 
         await using var con = new SqlConnection(_connectionString);
         await using var cmd = new SqlCommand(sql, con);
         cmd.Parameters.AddWithValue("@Estado", (object?)estado ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@Offset", (page - 1) * pageSize);
-        cmd.Parameters.AddWithValue("@PageSize", pageSize);
+        cmd.Parameters.AddWithValue("@StartRow", ((page - 1) * pageSize) + 1);
+        cmd.Parameters.AddWithValue("@EndRow", page * pageSize);
         await con.OpenAsync(cancellationToken);
         await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
 

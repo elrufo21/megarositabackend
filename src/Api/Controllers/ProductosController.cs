@@ -245,14 +245,12 @@ public class ProductosController : ControllerBase
 
     [AllowAnonymous]
     [HttpGet("listar-productos", Name = "ListarProductosPaginado")]
-    [ProducesResponseType(typeof(ProductoListadoPaginadoResponse), (int)HttpStatusCode.OK)]
-    public async Task<ActionResult<ProductoListadoPaginadoResponse>> ListarProductos(
+    [ProducesResponseType(typeof(IReadOnlyList<ProductoListadoItem>), (int)HttpStatusCode.OK)]
+    public async Task<ActionResult<IReadOnlyList<ProductoListadoItem>>> ListarProductos(
         [FromQuery] string? busqueda = "",
-        [FromQuery] int pagina = 1,
-        [FromQuery] int tamanoPagina = 50,
         CancellationToken cancellationToken = default)
     {
-        return Ok(await _mediator.ListarProductosAsync(busqueda, pagina, tamanoPagina, cancellationToken));
+        return Ok(await _mediator.ListarProductosAsync(busqueda, cancellationToken));
     }
 
     private static bool IsValidImage(IFormFile file, out string error)

@@ -94,6 +94,7 @@ public class UsuarioRepository : IUsuario
             CorreoSgo = esFormatoNuevo ? GetPayloadValue(payload, 15) : null,
             PasswordCorreo = esFormatoNuevo ? GetPayloadValue(payload, 16) : null,
             CorreosAdmin = esFormatoNuevo ? GetPayloadValue(payload, 17) : null,
+            LogoCompania = esFormatoNuevo ? GetPayloadValue(payload, 18) : GetPayloadValue(payload, 19, null),
             Token = _authService.CreateTokenA(expiresAtUtc.ToString("O")),
             ExpiresAtUtc = expiresAtUtc,
             ExpiresInSeconds = expiresInSeconds

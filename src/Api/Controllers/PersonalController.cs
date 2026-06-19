@@ -110,6 +110,23 @@ public class PersonalController : ControllerBase
         return Ok(await _mediator.ListarAsync(estado, page, pageSize, cancellationToken));
     }
 
+    [AllowAnonymous]
+    [HttpGet("by-code/{codigo}", Name = "GetPersonalSummaryByCode")]
+    [ProducesResponseType(typeof(PersonalCodigoResumen), (int)HttpStatusCode.OK)]
+    [ProducesResponseType((int)HttpStatusCode.NotFound)]
+    public async Task<ActionResult<PersonalCodigoResumen>> GetPersonalSummaryByCode(
+        string codigo,
+        CancellationToken cancellationToken = default)
+    {
+        var result = await _mediator.ObtenerResumenPorCodigoAsync(codigo, cancellationToken);
+        if (result is null)
+        {
+            return NotFound();
+        }
+
+        return Ok(result);
+    }
+
     private static bool IsValidImage(IFormFile file, out string error)
     {
         if (file.Length > MaxImageSizeBytes)

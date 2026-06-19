@@ -43,6 +43,7 @@ public class CompaniaRepository : ICompania
                                 CorreoSGO,
                                 PasswordCorreo,
                                 CorreosAdmin,
+                                logoCompania,
                                 BoletaPorLote)
                               VALUES (
                                 @CompaniaRazonSocial,
@@ -70,6 +71,7 @@ public class CompaniaRepository : ICompania
                                 @CorreoSGO,
                                 @PasswordCorreo,
                                 @CorreosAdmin,
+                                @logoCompania,
                                 @BoletaPorLote)";
 
         await using var con = new SqlConnection(_connectionString);
@@ -108,6 +110,7 @@ public class CompaniaRepository : ICompania
                                 CorreoSGO = @CorreoSGO,
                                 PasswordCorreo = @PasswordCorreo,
                                 CorreosAdmin = @CorreosAdmin,
+                                logoCompania = @logoCompania,
                                 BoletaPorLote = @BoletaPorLote
                               WHERE CompaniaId = @Id";
 
@@ -148,10 +151,91 @@ public class CompaniaRepository : ICompania
         return rows > 0;
     }
 
+    public async Task<Compania?> ObtenerPorIdAsync(int id, CancellationToken cancellationToken = default)
+    {
+        const string sql = """
+            SELECT CompaniaId,
+                   CompaniaRazonSocial,
+                   CompaniaRUC,
+                   CompaniaDireccion,
+                   CompaniaTelefono,
+                   CompaniaEmail,
+                   CompaniaIniFecha,
+                   CompaniaComercial,
+                   CompaniaUserSecun,
+                   ComapaniaPWD,
+                   CompaniaPFX,
+                   CompaniaClave,
+                   CompaniaNomUBG,
+                   CompaniaCodigoUBG,
+                   CompaniaDistrito,
+                   CompaniaDirecSunat,
+                   ICBPER,
+                   TokenApi,
+                   ClienIdToken,
+                   DescuentoMax,
+                   RenovacionOSE,
+                   RenovacionFirma,
+                   RenovacionSome,
+                   CorreoSGO,
+                   PasswordCorreo,
+                   CorreosAdmin,
+                   logoCompania,
+                   BoletaPorLote
+            FROM Compania
+            WHERE CompaniaId = @Id;
+            """;
+
+        await using var con = new SqlConnection(_connectionString);
+        await using var cmd = new SqlCommand(sql, con);
+        cmd.Parameters.AddWithValue("@Id", id);
+        await con.OpenAsync(cancellationToken);
+        await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+
+        if (!await reader.ReadAsync(cancellationToken))
+        {
+            return null;
+        }
+
+        return MapCompania(reader);
+    }
+
     public async Task<IReadOnlyList<Compania>> ListarAsync(int page = 1, int pageSize = 50, CancellationToken cancellationToken = default)
     {
         (page, pageSize) = NormalizePagination(page, pageSize);
-        const string sql = @"SELECT CompaniaId,
+        const string sql = @"WITH Paged AS (
+                                SELECT CompaniaId,
+                                       CompaniaRazonSocial,
+                                       CompaniaRUC,
+                                       CompaniaDireccion,
+                                       CompaniaTelefono,
+                                       CompaniaEmail,
+                                       CompaniaIniFecha,
+                                       CompaniaComercial,
+                                       CompaniaUserSecun,
+                                       ComapaniaPWD,
+                                       CompaniaPFX,
+                                       CompaniaClave,
+                                       CompaniaNomUBG,
+                                       CompaniaCodigoUBG,
+                                       CompaniaDistrito,
+                                       CompaniaDirecSunat,
+                                       ICBPER,
+                                       TokenApi,
+                                       ClienIdToken,
+                                       DescuentoMax,
+                                       RenovacionOSE,
+                                       RenovacionFirma,
+                                       RenovacionSome,
+                                       CorreoSGO,
+                                       PasswordCorreo,
+                                       CorreosAdmin,
+                                       logoCompania,
+                                       BoletaPorLote,
+                                       ROW_NUMBER() OVER (ORDER BY CompaniaId DESC) AS RowNum
+                                FROM Compania
+                             )
+                             SELECT CompaniaId,
                                     CompaniaRazonSocial,
                                     CompaniaRUC,
                                     CompaniaDireccion,
@@ -177,51 +261,23 @@ public class CompaniaRepository : ICompania
                                     CorreoSGO,
                                     PasswordCorreo,
                                     CorreosAdmin,
+                                    logoCompania,
                                     BoletaPorLote
-                             FROM Compania
-                             ORDER BY CompaniaId DESC
-                             OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY;";
+                             FROM Paged
+                             WHERE RowNum BETWEEN @StartRow AND @EndRow
+                             ORDER BY RowNum;";
 
         await using var con = new SqlConnection(_connectionString);
         await using var cmd = new SqlCommand(sql, con);
-        cmd.Parameters.AddWithValue("@Offset", (page - 1) * pageSize);
-        cmd.Parameters.AddWithValue("@PageSize", pageSize);
+        cmd.Parameters.AddWithValue("@StartRow", ((page - 1) * pageSize) + 1);
+        cmd.Parameters.AddWithValue("@EndRow", page * pageSize);
         await con.OpenAsync(cancellationToken);
         await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
 
         var lista = new List<Compania>();
         while (await reader.ReadAsync(cancellationToken))
         {
-            lista.Add(new Compania
-            {
-                CompaniaId = Convert.ToInt32(reader["CompaniaId"]),
-                CompaniaRazonSocial = reader["CompaniaRazonSocial"].ToString(),
-                CompaniaRUC = reader["CompaniaRUC"].ToString(),
-                CompaniaDireccion = reader["CompaniaDireccion"].ToString(),
-                CompaniaTelefono = reader["CompaniaTelefono"].ToString(),
-                CompaniaEmail = reader["CompaniaEmail"].ToString(),
-                CompaniaIniFecha = reader["CompaniaIniFecha"].ToString(),
-                CompaniaComercial = reader["CompaniaComercial"].ToString(),
-                CompaniaUserSecun = reader["CompaniaUserSecun"].ToString(),
-                ComapaniaPWD = reader["ComapaniaPWD"].ToString(),
-                CompaniaPFX = reader["CompaniaPFX"].ToString(),
-                CompaniaClave = reader["CompaniaClave"].ToString(),
-                CompaniaNomUBG = reader["CompaniaNomUBG"].ToString(),
-                CompaniaCodigoUBG = reader["CompaniaCodigoUBG"].ToString(),
-                CompaniaDistrito = reader["CompaniaDistrito"].ToString(),
-                CompaniaDirecSunat = reader["CompaniaDirecSunat"].ToString(),
-                ICBPER = reader["ICBPER"] == DBNull.Value ? null : Convert.ToDecimal(reader["ICBPER"]),
-                TokenApi = reader["TokenApi"].ToString(),
-                ClienIdToken = reader["ClienIdToken"].ToString(),
-                DescuentoMax = reader["DescuentoMax"] == DBNull.Value ? null : Convert.ToDecimal(reader["DescuentoMax"]),
-                RenovacionOSE = reader["RenovacionOSE"] == DBNull.Value ? null : Convert.ToDateTime(reader["RenovacionOSE"]),
-                RenovacionFirma = reader["RenovacionFirma"] == DBNull.Value ? null : Convert.ToDateTime(reader["RenovacionFirma"]),
-                RenovacionSome = reader["RenovacionSome"] == DBNull.Value ? null : Convert.ToDateTime(reader["RenovacionSome"]),
-                CorreoSGO = reader["CorreoSGO"].ToString(),
-                PasswordCorreo = reader["PasswordCorreo"].ToString(),
-                CorreosAdmin = reader["CorreosAdmin"].ToString(),
-                BoletaPorLote = reader["BoletaPorLote"] != DBNull.Value && Convert.ToBoolean(reader["BoletaPorLote"])
-            });
+            lista.Add(MapCompania(reader));
         }
 
         return lista;
@@ -231,16 +287,22 @@ public class CompaniaRepository : ICompania
     {
         (page, pageSize) = NormalizePagination(page, pageSize);
         const string sql = """
+            WITH Paged AS (
+                SELECT CompaniaId,
+                       CompaniaRazonSocial,
+                       ROW_NUMBER() OVER (ORDER BY CompaniaId DESC) AS RowNum
+                FROM Compania
+            )
             SELECT CompaniaId, CompaniaRazonSocial
-            FROM Compania
-            ORDER BY CompaniaId DESC
-            OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY;
+            FROM Paged
+            WHERE RowNum BETWEEN @StartRow AND @EndRow
+            ORDER BY RowNum;
             """;
 
         await using var con = new SqlConnection(_connectionString);
         await using var cmd = new SqlCommand(sql, con);
-        cmd.Parameters.AddWithValue("@Offset", (page - 1) * pageSize);
-        cmd.Parameters.AddWithValue("@PageSize", pageSize);
+        cmd.Parameters.AddWithValue("@StartRow", ((page - 1) * pageSize) + 1);
+        cmd.Parameters.AddWithValue("@EndRow", page * pageSize);
         await con.OpenAsync(cancellationToken);
         await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
 
@@ -294,6 +356,7 @@ public class CompaniaRepository : ICompania
         cmd.Parameters.AddWithValue("@CorreoSGO", (object?)compania.CorreoSGO ?? DBNull.Value);
         cmd.Parameters.AddWithValue("@PasswordCorreo", (object?)compania.PasswordCorreo ?? DBNull.Value);
         cmd.Parameters.AddWithValue("@CorreosAdmin", (object?)compania.CorreosAdmin ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("@logoCompania", (object?)compania.LogoCompania ?? DBNull.Value);
         cmd.Parameters.AddWithValue("@BoletaPorLote", compania.BoletaPorLote);
     }
 
@@ -302,5 +365,40 @@ public class CompaniaRepository : ICompania
         var normalizedPage = page < 1 ? 1 : page;
         var normalizedPageSize = pageSize < 1 ? 1 : Math.Min(pageSize, 100);
         return (normalizedPage, normalizedPageSize);
+    }
+
+    private static Compania MapCompania(SqlDataReader reader)
+    {
+        return new Compania
+        {
+            CompaniaId = Convert.ToInt32(reader["CompaniaId"]),
+            CompaniaRazonSocial = reader["CompaniaRazonSocial"].ToString(),
+            CompaniaRUC = reader["CompaniaRUC"].ToString(),
+            CompaniaDireccion = reader["CompaniaDireccion"].ToString(),
+            CompaniaTelefono = reader["CompaniaTelefono"].ToString(),
+            CompaniaEmail = reader["CompaniaEmail"].ToString(),
+            CompaniaIniFecha = reader["CompaniaIniFecha"].ToString(),
+            CompaniaComercial = reader["CompaniaComercial"].ToString(),
+            CompaniaUserSecun = reader["CompaniaUserSecun"].ToString(),
+            ComapaniaPWD = reader["ComapaniaPWD"].ToString(),
+            CompaniaPFX = reader["CompaniaPFX"].ToString(),
+            CompaniaClave = reader["CompaniaClave"].ToString(),
+            CompaniaNomUBG = reader["CompaniaNomUBG"].ToString(),
+            CompaniaCodigoUBG = reader["CompaniaCodigoUBG"].ToString(),
+            CompaniaDistrito = reader["CompaniaDistrito"].ToString(),
+            CompaniaDirecSunat = reader["CompaniaDirecSunat"].ToString(),
+            ICBPER = reader["ICBPER"] == DBNull.Value ? null : Convert.ToDecimal(reader["ICBPER"]),
+            TokenApi = reader["TokenApi"].ToString(),
+            ClienIdToken = reader["ClienIdToken"].ToString(),
+            DescuentoMax = reader["DescuentoMax"] == DBNull.Value ? null : Convert.ToDecimal(reader["DescuentoMax"]),
+            RenovacionOSE = reader["RenovacionOSE"] == DBNull.Value ? null : Convert.ToDateTime(reader["RenovacionOSE"]),
+            RenovacionFirma = reader["RenovacionFirma"] == DBNull.Value ? null : Convert.ToDateTime(reader["RenovacionFirma"]),
+            RenovacionSome = reader["RenovacionSome"] == DBNull.Value ? null : Convert.ToDateTime(reader["RenovacionSome"]),
+            CorreoSGO = reader["CorreoSGO"].ToString(),
+            PasswordCorreo = reader["PasswordCorreo"].ToString(),
+            CorreosAdmin = reader["CorreosAdmin"].ToString(),
+            LogoCompania = reader["logoCompania"].ToString(),
+            BoletaPorLote = reader["BoletaPorLote"] != DBNull.Value && Convert.ToBoolean(reader["BoletaPorLote"])
+        };
     }
 }

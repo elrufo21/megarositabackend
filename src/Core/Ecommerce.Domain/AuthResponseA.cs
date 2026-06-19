@@ -26,6 +26,7 @@ public class AuthResponseA
     public string? CorreoSgo { get; set; }
     public string? PasswordCorreo { get; set; }
     public string? CorreosAdmin { get; set; }
+    public string? LogoCompania { get; set; }
     //public string? RUC { get; set; }
     //public string? UsuarioSerie { get; set; }
     //public string? Avatar { get; set; }

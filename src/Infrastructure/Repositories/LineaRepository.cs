@@ -46,16 +46,23 @@ public class LineaRepository : ILinea
         (page, pageSize) = NormalizePagination(page, pageSize);
 
         const string sql = """
+            WITH Paged AS (
+                SELECT IdSubLinea,
+                       NombreSublinea,
+                       CodigoSunat,
+                       ROW_NUMBER() OVER (ORDER BY IdSubLinea DESC) AS RowNum
+                FROM Sublinea
+            )
             SELECT IdSubLinea, NombreSublinea, CodigoSunat
-            FROM Sublinea
-            ORDER BY IdSubLinea DESC
-            OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY;
+            FROM Paged
+            WHERE RowNum BETWEEN @StartRow AND @EndRow
+            ORDER BY RowNum;
             """;
 
         await using var con = new SqlConnection(_connectionString);
         await using var cmd = new SqlCommand(sql, con);
-        cmd.Parameters.AddWithValue("@Offset", (page - 1) * pageSize);
-        cmd.Parameters.AddWithValue("@PageSize", pageSize);
+        cmd.Parameters.AddWithValue("@StartRow", ((page - 1) * pageSize) + 1);
+        cmd.Parameters.AddWithValue("@EndRow", page * pageSize);
         await con.OpenAsync(cancellationToken);
         await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
 

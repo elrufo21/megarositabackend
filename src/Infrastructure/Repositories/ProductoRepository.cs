@@ -101,9 +101,78 @@ public class ProductoRepository : IProducto
 
     public async Task<string> ListarCrudRawAsync(string? estado = "ACTIVO", CancellationToken cancellationToken = default)
     {
-        return estado is null
-            ? await _accesoDatos.EjecutarComandoAsync("uspListarProducto", cancellationToken: cancellationToken)
-            : await _accesoDatos.EjecutarComandoAsync("uspListarProducto", "@Estado", estado, cancellationToken);
+        var estadoNormalizado = string.IsNullOrWhiteSpace(estado) ? null : estado.Trim();
+
+        var intentosConEstado = new (string Sp, string Param)[]
+        {
+            ("uspListarProducto", "@Estado"),
+            ("dbo.uspListarProducto", "@Estado"),
+            ("web.uspListarProducto", "@Estado"),
+            ("uspListarProducto", "@Data"),
+            ("dbo.uspListarProducto", "@Data"),
+            ("web.uspListarProducto", "@Data")
+        };
+
+        var intentosSinEstado = new[]
+        {
+            "uspListarProducto",
+            "dbo.uspListarProducto",
+            "web.uspListarProducto",
+            "uspListaWebProducto",
+            "dbo.uspListaWebProducto",
+            "web.uspListaWebProducto"
+        };
+
+        SqlException? ultimaSql = null;
+
+        if (!string.IsNullOrWhiteSpace(estadoNormalizado))
+        {
+            foreach (var intento in intentosConEstado)
+            {
+                try
+                {
+                    var raw = await _accesoDatos.EjecutarComandoAsync(
+                        intento.Sp,
+                        intento.Param,
+                        estadoNormalizado,
+                        cancellationToken);
+
+                    if (!string.IsNullOrWhiteSpace(raw))
+                    {
+                        return raw;
+                    }
+                }
+                catch (SqlException ex) when (IsMissingProcedureOrParameter(ex))
+                {
+                    ultimaSql = ex;
+                }
+            }
+        }
+
+        foreach (var sp in intentosSinEstado)
+        {
+            try
+            {
+                var raw = await _accesoDatos.EjecutarComandoAsync(sp, cancellationToken: cancellationToken);
+                if (!string.IsNullOrWhiteSpace(raw))
+                {
+                    return raw;
+                }
+            }
+            catch (SqlException ex) when (IsMissingProcedureOrParameter(ex))
+            {
+                ultimaSql = ex;
+            }
+        }
+
+        if (ultimaSql is not null)
+        {
+            throw new InvalidOperationException(
+                "No se pudo listar productos: no se encontró un SP compatible (uspListarProducto/uspListaWebProducto).",
+                ultimaSql);
+        }
+
+        return string.Empty;
     }
 
     public async Task<IReadOnlyList<Producto>> ListarCrudAsync(string? estado = "ACTIVO", int page = 1, int pageSize = 50, CancellationToken cancellationToken = default)
@@ -128,13 +197,12 @@ public class ProductoRepository : IProducto
         return ApplyPagination(lista, page, pageSize);
     }
 
-    public async Task<ProductoListadoPaginadoResponse> ListarProductosAsync(
+    public async Task<IReadOnlyList<ProductoListadoItem>> ListarProductosAsync(
         string? busqueda = "",
-        int pagina = 1,
-        int tamanoPagina = 50,
         CancellationToken cancellationToken = default)
     {
-        (pagina, tamanoPagina) = NormalizePagination(pagina, tamanoPagina);
+        const int pagina = 1;
+        const int tamanoPagina = 50;
         var attempts = new[]
         {
             "web.listarProductos_web",
@@ -164,25 +232,12 @@ public class ProductoRepository : IProducto
                 await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
 
                 var items = new List<ProductoListadoItem>();
-                var totalRegistros = 0;
-
                 while (await reader.ReadAsync(cancellationToken))
                 {
-                    if (totalRegistros == 0)
-                    {
-                        totalRegistros = ToInt32(reader, "TotalRegistros");
-                    }
-
                     items.Add(MapProductoListado(reader));
                 }
 
-                return new ProductoListadoPaginadoResponse
-                {
-                    Pagina = pagina,
-                    TamanoPagina = tamanoPagina,
-                    TotalRegistros = totalRegistros,
-                    Items = items
-                };
+                return items.Take(50).ToList();
             }
             catch (SqlException ex) when (IsMissingProcedureOrParameter(ex) || IsSchemaIncompatibility(ex))
             {
@@ -200,7 +255,7 @@ public class ProductoRepository : IProducto
             }
         }
 
-        var legacyFallback = await TryListarProductosDesdeRawLegadoAsync(busqueda, pagina, tamanoPagina, cancellationToken);
+        var legacyFallback = await TryListarProductosDesdeRawLegadoAsync(busqueda, cancellationToken);
         if (legacyFallback is not null)
         {
             return legacyFallback;
@@ -213,19 +268,11 @@ public class ProductoRepository : IProducto
                 lastFallbackException);
         }
 
-        return new ProductoListadoPaginadoResponse
-        {
-            Pagina = pagina,
-            TamanoPagina = tamanoPagina,
-            TotalRegistros = 0,
-            Items = new List<ProductoListadoItem>()
-        };
+        return Array.Empty<ProductoListadoItem>();
     }
 
-    private async Task<ProductoListadoPaginadoResponse?> TryListarProductosDesdeRawLegadoAsync(
+    private async Task<IReadOnlyList<ProductoListadoItem>?> TryListarProductosDesdeRawLegadoAsync(
         string? busqueda,
-        int pagina,
-        int tamanoPagina,
         CancellationToken cancellationToken)
     {
         var query = (busqueda ?? string.Empty).Trim();
@@ -270,19 +317,7 @@ public class ProductoRepository : IProducto
                         .ToList();
                 }
 
-                var total = parsed.Count;
-                var paged = parsed
-                    .Skip((pagina - 1) * tamanoPagina)
-                    .Take(tamanoPagina)
-                    .ToList();
-
-                return new ProductoListadoPaginadoResponse
-                {
-                    Pagina = pagina,
-                    TamanoPagina = tamanoPagina,
-                    TotalRegistros = total,
-                    Items = paged
-                };
+                return parsed.Take(50).ToList();
             }
             catch (SqlException ex) when (IsMissingProcedureOrParameter(ex) || IsSchemaIncompatibility(ex))
             {

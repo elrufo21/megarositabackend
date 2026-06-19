@@ -15,7 +15,9 @@ using Newtonsoft.Json.Linq;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Net.WebSockets;
 using System.Security.Claims;
+using System.Text;
 using BusinessEntities;
 
 namespace Ecommerce.Api.Controllers;
@@ -93,6 +95,9 @@ public class NotaController : ControllerBase
     private readonly IConfiguration _configuration;
     private readonly ICpeGateway _cpeGateway;
     private readonly ILogger<NotaController> _logger;
+    private static readonly SemaphoreSlim LegacyWsLock = new(1, 1);
+    private static ClientWebSocket? _legacyWsClient;
+    private static string? _legacyWsEndpoint;
 
     public NotaController(
         INotaPedido mediador,
@@ -272,8 +277,8 @@ public class NotaController : ControllerBase
 
     [AllowAnonymous]
     [HttpGet("list", Name = "GetNotaList")]
-    [ProducesResponseType(typeof(IReadOnlyList<EListaNota>), (int)HttpStatusCode.OK)]
-    public async Task<ActionResult<IReadOnlyList<EListaNota>>> ListarNota(
+    [ProducesResponseType(typeof(NotaListadoPaginadoResponse), (int)HttpStatusCode.OK)]
+    public async Task<ActionResult<NotaListadoPaginadoResponse>> ListarNota(
         [FromQuery] DateTime? fechaInicio,
         [FromQuery] DateTime? fechaFin,
         [FromQuery] int page = 1,
@@ -313,6 +318,29 @@ public class NotaController : ControllerBase
         var nota = await _mediator.ObtenerPorIdAsync(id, cancellationToken);
         if (nota is null) return NotFound();
         return Ok(nota);
+    }
+
+    [AllowAnonymous]
+    [HttpGet("{id:long}/estado", Name = "GetNotaPedidoEstado")]
+    [ProducesResponseType((int)HttpStatusCode.OK)]
+    [ProducesResponseType((int)HttpStatusCode.NotFound)]
+    public async Task<IActionResult> ObtenerEstadoNotaPedido(long id, CancellationToken cancellationToken)
+    {
+        var nota = await _mediator.ObtenerPorIdAsync(id, cancellationToken);
+        if (nota is null)
+        {
+            return NotFound(new
+            {
+                mensaje = $"No se encontró la nota con NotaId={id}."
+            });
+        }
+
+        return Ok(new
+        {
+            notaId = nota.NotaId,
+            estado = string.IsNullOrWhiteSpace(nota.NotaEstado) ? "PENDIENTE" : nota.NotaEstado,
+            estadoSunat = string.IsNullOrWhiteSpace(nota.EstadoSunat) ? "PENDIENTE" : nota.EstadoSunat
+        });
     }
 
     [AllowAnonymous]
@@ -1472,6 +1500,7 @@ public class NotaController : ControllerBase
             AplicarReglaTributariaDocumento(request.Nota, detalles);
             var vdataNota = BuildOrdenPayload(request.Nota, detalles);
             var resultado = await _mediator.RegistrarOrdenAsync(vdataNota, cancellationToken);
+            await NotificarRegistroWsLegacyAsync(request.Nota, resultado, cancellationToken);
 
             if (HabilitarEnvioOseAlRegistrarOrden && EsFactura(request.Nota.NotaDocu))
             {
@@ -1509,7 +1538,9 @@ public class NotaController : ControllerBase
         }
 
         var vdata = BuildOrdenPayload(body);
-        return Ok(await _mediator.RegistrarOrdenAsync(vdata, cancellationToken));
+        var resultadoRaw = await _mediator.RegistrarOrdenAsync(vdata, cancellationToken);
+        await NotificarRegistroWsLegacyAsync(nota: null, resultadoRaw, cancellationToken);
+        return Ok(resultadoRaw);
     }
 
     [Authorize]
@@ -1603,18 +1634,73 @@ public class NotaController : ControllerBase
                 return BadRequest("NotaPedido requerida.");
             }
             var detalles = request.Detalles ?? new List<DetalleNota>();
+            var companiaResuelta = await ResolverCompaniaIdEdicionAsync(
+                request.Nota.NotaId,
+                request.Nota.CompaniaId,
+                cancellationToken);
+            if (companiaResuelta > 0)
+            {
+                request.Nota.CompaniaId = companiaResuelta;
+            }
+
             AplicarReglaTributariaDocumento(request.Nota, detalles);
             var vdataNota = BuildEditarPayload(request.Nota, detalles);
-            var resultado = await _mediator.EditarOrdenAsync(vdataNota, cancellationToken);
-            if (EsResultadoEdicionExitosa(resultado))
+            var vdataNotaLegacy = BuildEditarPayloadLegacy(request.Nota, detalles);
+            var resultado = await EjecutarEditarOrdenConFallbackAsync(vdataNota, vdataNotaLegacy, cancellationToken);
+
+            await ForzarEstadoNotaPostEdicionAsync(
+                request.Nota.NotaId,
+                request.Nota.NotaEstado,
+                cancellationToken);
+            await ForzarEstadoDetallePostEdicionAsync(request.Nota.NotaId, cancellationToken);
+
+            var notificarEdicion = DebeNotificarWsEnEdicion(resultado);
+            _logger.LogInformation(
+                "EditarOrden(Nota obj) NotaId={NotaId}, Resultado={Resultado}, NotificarWs={NotificarWs}",
+                request.Nota.NotaId,
+                resultado,
+                notificarEdicion);
+
+            if (notificarEdicion)
             {
                 await ActualizarTributacionPostEdicionAsync(request.Nota, detalles, cancellationToken);
+                await NotificarEdicionWsLegacyAsync(
+                    request.Nota.NotaId,
+                    ResolverTotalEdicion(request.Nota, detalles),
+                    request.Nota.NotaUsuario,
+                    cancellationToken);
             }
             return Ok(resultado);
         }
 
         var vdata = BuildEditarPayload(body);
-        return Ok(await _mediator.EditarOrdenAsync(vdata, cancellationToken));
+        var notaIdBody = TryGetIntFromJson(body, "NotaId", "NotaIDBR", "NotaIdbr", "IDBR");
+        var companiaIdBody = TryGetIntFromJson(body, "CompaniaId");
+        var companiaIdResuelta = await ResolverCompaniaIdEdicionAsync(notaIdBody ?? 0, companiaIdBody, cancellationToken);
+        var vdataLegacy = BuildEditarPayloadLegacy(body, companiaIdResuelta);
+        var resultadoRaw = await EjecutarEditarOrdenConFallbackAsync(vdata, vdataLegacy, cancellationToken);
+
+        var notaIdEstado = TryGetIntFromJson(body, "NotaId", "NotaIDBR", "NotaIdbr", "IDBR") ?? 0;
+        var estadoBody = ExtractNotaEstado(body);
+        await ForzarEstadoNotaPostEdicionAsync(notaIdEstado, estadoBody, cancellationToken);
+        await ForzarEstadoDetallePostEdicionAsync(notaIdEstado, cancellationToken);
+        var notificarEdicionRaw = DebeNotificarWsEnEdicion(resultadoRaw);
+        _logger.LogInformation(
+            "EditarOrden(body plano) NotaId={NotaId}, Resultado={Resultado}, NotificarWs={NotificarWs}",
+            notaIdEstado,
+            resultadoRaw,
+            notificarEdicionRaw);
+
+        if (notificarEdicionRaw)
+        {
+            await NotificarEdicionWsLegacyAsync(
+                notaIdEstado,
+                ResolverTotalEdicion(body),
+                TryGetStringFromJson(body, "Usuario", "NotaUsuario"),
+                cancellationToken);
+        }
+
+        return Ok(resultadoRaw);
     }
 
     private string BuildOrdenPayload(NotaPedido nota, IEnumerable<DetalleNota> detalles)
@@ -1703,7 +1789,7 @@ public class NotaController : ControllerBase
                 Format2(item.DetalleImporte ?? 0m),
                 item.DetalleEstado ?? "PENDIENTE",
                 Format4(item.ValorUM ?? 0m),
-                "S"
+                "E"
             };
             vdata += string.Join("|", detailFields);
             if (i < detalleList.Count - 1) vdata += ";";
@@ -1812,7 +1898,8 @@ public class NotaController : ControllerBase
                 Format2(item.DetallePrecio ?? 0m),
                 Format2(item.DetalleImporte ?? 0m),
                 item.DetalleEstado ?? "PENDIENTE",
-                "0"
+                Format4(item.ValorUM ?? 1m),
+                "E"
             };
             detailParts.Add(string.Join("|", detailFields));
         }
@@ -1949,9 +2036,7 @@ public class NotaController : ControllerBase
                     ? "PENDIENTE"
                     : GetFirstString(item, "DetalleEstado", "estado"),
                 Format4(GetFirstDecimal(item, 0m, "valorUM", "ValorUM")),
-                string.IsNullOrWhiteSpace(GetFirstString(item, "Estado", "estadoDetalle", "DetalleFlag", "AplicaINV", "aplicaInv", "aplicaINV"))
-                    ? "S"
-                    : GetFirstString(item, "Estado", "estadoDetalle", "DetalleFlag", "AplicaINV", "aplicaInv", "aplicaINV")
+                "E"
             };
             vdata += string.Join("|", detailFields);
             if (i < count - 1) vdata += ";";
@@ -2025,12 +2110,470 @@ public class NotaController : ControllerBase
                 string.IsNullOrWhiteSpace(GetFirstString(item, "DetalleEstado", "estado"))
                     ? "PENDIENTE"
                     : GetFirstString(item, "DetalleEstado", "estado"),
-                "0"
+                Format4(GetFirstDecimal(item, 1m, "valorUM", "ValorUM")),
+                "E"
             };
             detailParts.Add(string.Join("|", detailFields));
         }
 
         return string.Join("|", headerFields) + "[" + string.Join(";", detailParts);
+    }
+
+    private string BuildEditarPayloadLegacy(NotaPedido nota, IEnumerable<DetalleNota> detalles)
+    {
+        var detalleList = detalles == null ? new List<DetalleNota>() : new List<DetalleNota>(detalles);
+
+        var icbper = nota.ICBPER ?? 0m;
+        var totalDetalle = detalleList.Sum(x => x.DetalleImporte ?? 0m);
+        var total = nota.NotaTotal ?? (totalDetalle + icbper);
+        var subtotal = nota.NotaSubtotal ?? DecimalMax(0m, total - icbper);
+        var descuento = nota.NotaDescuento ?? 0m;
+        var docuGravada = DecimalMax(0m, subtotal);
+        var docuDescuento = descuento;
+
+        var headerFields = new List<string?>
+        {
+            (nota.NotaId > 0 ? nota.NotaId : 0).ToString(CultureInfo.InvariantCulture),
+            string.IsNullOrWhiteSpace(nota.NotaDocu) ? "BOLETA" : nota.NotaDocu,
+            (nota.ClienteId ?? 0).ToString(CultureInfo.InvariantCulture),
+            nota.NotaUsuario ?? string.Empty,
+            nota.NotaFormaPago ?? string.Empty,
+            nota.NotaCondicion ?? string.Empty,
+            nota.NotaDireccion ?? string.Empty,
+            nota.NotaTelefono ?? string.Empty,
+            Format2(subtotal),
+            Format2(nota.NotaMovilidad ?? 0m),
+            Format2(descuento),
+            Format2(total),
+            Format2(nota.NotaAdicional ?? 0m),
+            Format2(nota.NotaTarjeta ?? 0m),
+            Format2(nota.NotaPagar ?? total),
+            (nota.CompaniaId ?? 0).ToString(CultureInfo.InvariantCulture),
+            nota.NotaEntrega ?? string.Empty,
+            string.IsNullOrWhiteSpace(nota.ModificadoPor) ? (nota.NotaUsuario ?? string.Empty) : nota.ModificadoPor,
+            nota.NotaSerie ?? string.Empty,
+            nota.NotaNumero ?? string.Empty,
+            "SI",
+            Format2(nota.NotaGanancia ?? 0m),
+            Letras.enletras(total.ToString("N2", CultureInfo.InvariantCulture)) + "  SOLES",
+            Format2(0m),
+            nota.NotaConcepto ?? string.Empty,
+            Format2(icbper),
+            Format2(docuGravada),
+            Format2(docuDescuento)
+        };
+
+        var detailParts = new List<string>();
+        foreach (var item in detalleList)
+        {
+            var detailFields = new[]
+            {
+                item.DetalleId.ToString(CultureInfo.InvariantCulture),
+                Convert.ToInt32(item.IdProducto ?? 0).ToString(CultureInfo.InvariantCulture),
+                Format2(item.DetalleCantidad ?? 0m),
+                item.DetalleUm ?? string.Empty,
+                Format2(item.DetalleCosto ?? 0m),
+                Format2(item.DetallePrecio ?? 0m),
+                Format2(item.DetalleImporte ?? 0m),
+                item.DetalleEstado ?? "PENDIENTE",
+                Format4(item.ValorUM ?? 1m),
+                "E"
+            };
+            detailParts.Add(string.Join("|", detailFields));
+        }
+
+        return string.Join("|", headerFields) + "[" + string.Join(";", detailParts);
+    }
+
+    private string BuildEditarPayloadLegacy(JsonElement body, int companiaIdFallback = 0)
+    {
+        string json = JsonSerializer.Serialize(body);
+        dynamic res = JObject.Parse(json);
+        var productoToken = res["requestDetalle"] ?? res["requestdetalle"] ?? res["detalles"] ?? res["Detalles"];
+        var productoArray = productoToken as JArray;
+        var producto = productoToken as JObject ?? new JObject();
+
+        var notaId = Convert.ToInt32(GetFirstDecimal(res, 0m, "NotaId", "NotaIDBR", "NotaIdbr", "IDBR"));
+        var docu = GetFirstString(res, "Documento", "NotaDocu", "Docu");
+        if (string.IsNullOrWhiteSpace(docu)) docu = "BOLETA";
+        var clienteId = GetFirstString(res, "ClienteId");
+        if (string.IsNullOrWhiteSpace(clienteId)) clienteId = "0";
+        var usuario = GetFirstString(res, "Usuario", "NotaUsuario");
+        var formaPago = GetFirstString(res, "FormaPago", "NotaFormaPago");
+        var condicion = GetFirstString(res, "Condicion", "NotaCondicion");
+        var direccion = GetFirstString(res, "Direccion", "NotaDireccion");
+        var telefono = GetFirstString(res, "Telefono", "NotaTelefono");
+
+        var icbper = GetFirstDecimal(res, 0m, "ICBPER");
+        var subtotal = GetFirstDecimal(res, 0m, "SubTotal", "NotaSubtotal", "DocuSubtotal");
+        var movilidad = GetFirstDecimal(res, 0m, "Movilidad", "NotaMovilidad");
+        var descuento = GetFirstDecimal(res, 0m, "Descuento", "NotaDescuento", "DocuDescuento");
+        var total = GetFirstDecimal(res, 0m, "Total", "NotaTotal");
+        if (total <= 0m)
+        {
+            total = SumarImporteDetalleJson(productoArray, producto) + icbper;
+        }
+        if (subtotal <= 0m)
+        {
+            subtotal = DecimalMax(0m, total - icbper);
+        }
+
+        var adicional = GetFirstDecimal(res, 0m, "Adicional", "NotaAdicional", "DocuAdicional");
+        var tarjeta = GetFirstDecimal(res, 0m, "Tarjeta", "NotaTarjeta");
+        var pagar = GetFirstDecimal(res, total, "Pagar", "NotaPagar", "PagoTotal");
+        var companiaId = GetFirstString(res, "CompaniaId");
+        if (string.IsNullOrWhiteSpace(companiaId))
+        {
+            companiaId = companiaIdFallback > 0 ? companiaIdFallback.ToString(CultureInfo.InvariantCulture) : "0";
+        }
+        var entrega = GetFirstString(res, "Entrega", "NotaEntrega");
+        var modificadoPor = GetFirstString(res, "ModificadoPor", "Usuario", "NotaUsuario");
+        var serie = GetFirstString(res, "NotaSerie", "Serie");
+        var numero = GetFirstString(res, "NotaNumero", "Numero", "NroOperacion");
+        var ganancia = GetFirstDecimal(res, 0m, "Ganancia", "NotaGanancia");
+        var letra = Letras.enletras(total.ToString("N2", CultureInfo.InvariantCulture)) + "  SOLES";
+        var docuAdicional = GetFirstDecimal(res, 0m, "DocuAdicional", "AdicionalDoc");
+        var concepto = GetFirstString(res, "Concepto", "NotaConcepto");
+        var docuGravada = GetFirstDecimal(res, DecimalMax(0m, subtotal), "DocuGravada", "Gravada");
+        var docuDescuento = GetFirstDecimal(res, descuento, "DocuDescuento");
+
+        var headerFields = new List<string?>
+        {
+            notaId.ToString(CultureInfo.InvariantCulture),
+            docu,
+            clienteId,
+            usuario,
+            formaPago,
+            condicion,
+            direccion,
+            telefono,
+            Format2(subtotal),
+            Format2(movilidad),
+            Format2(descuento),
+            Format2(total),
+            Format2(adicional),
+            Format2(tarjeta),
+            Format2(pagar),
+            companiaId,
+            entrega,
+            modificadoPor,
+            serie,
+            numero,
+            "SI",
+            Format2(ganancia),
+            letra,
+            Format2(docuAdicional),
+            concepto,
+            Format2(icbper),
+            Format2(docuGravada),
+            Format2(docuDescuento)
+        };
+
+        var detailParts = new List<string>();
+        var count = Convert.ToInt32(GetFirstDecimal(res, 0m, "Items"));
+        if (count == 0)
+        {
+            if (productoArray != null) count = productoArray.Count;
+            else count = producto.Properties().Count();
+        }
+
+        for (int i = 0; i < count; i++)
+        {
+            JToken? itemToken = null;
+            if (productoArray != null)
+            {
+                if (i < productoArray.Count) itemToken = productoArray[i];
+            }
+            else
+            {
+                var fila = i.ToString(CultureInfo.InvariantCulture);
+                itemToken = producto[fila];
+            }
+
+            if (itemToken is null) continue;
+
+            var detailFields = new[]
+            {
+                Convert.ToInt64(GetFirstDecimal(itemToken, 0m, "DetalleId", "detalleId")).ToString(CultureInfo.InvariantCulture),
+                Convert.ToInt32(GetFirstDecimal(itemToken, 0m, "productId", "IdProducto")).ToString(CultureInfo.InvariantCulture),
+                Format2(GetFirstDecimal(itemToken, 0m, "cantidad", "DetalleCantidad")),
+                GetFirstString(itemToken, "unidad", "DetalleUm"),
+                Format2(GetFirstDecimal(itemToken, 0m, "costo", "DetalleCosto")),
+                Format2(GetFirstDecimal(itemToken, 0m, "precio", "DetallePrecio")),
+                Format2(GetFirstDecimal(itemToken, 0m, "importe", "DetalleImporte")),
+                string.IsNullOrWhiteSpace(GetFirstString(itemToken, "DetalleEstado", "estado"))
+                    ? "PENDIENTE"
+                    : GetFirstString(itemToken, "DetalleEstado", "estado"),
+                Format4(GetFirstDecimal(itemToken, 1m, "valorUM", "ValorUM")),
+                "E"
+            };
+
+            detailParts.Add(string.Join("|", detailFields));
+        }
+
+        return string.Join("|", headerFields) + "[" + string.Join(";", detailParts);
+    }
+
+    private async Task<string> EjecutarEditarOrdenConFallbackAsync(string payloadWeb, string payloadLegacy, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var resultado = await _mediator.EditarOrdenAsync(payloadWeb, cancellationToken);
+            if (EsMensajeErrorSubstring(resultado))
+            {
+                _logger.LogWarning(
+                    "Edición web devolvió mensaje de error SUBSTRING/LEFT. Se reintenta con payload legacy. Resultado: {Resultado}",
+                    resultado);
+                return await _mediator.EditarOrdenAsync(payloadLegacy, cancellationToken);
+            }
+
+            return resultado;
+        }
+        catch (SqlException ex) when (EsErrorSubstringEditar(ex))
+        {
+            _logger.LogWarning(ex, "Edición web falló con error de SUBSTRING/LEFT. Se reintenta con payload legacy.");
+            return await _mediator.EditarOrdenAsync(payloadLegacy, cancellationToken);
+        }
+    }
+
+    private static bool EsErrorSubstringEditar(SqlException ex)
+    {
+        var mensaje = ex.Message ?? string.Empty;
+        return mensaje.Contains("SUBSTRING", StringComparison.OrdinalIgnoreCase)
+               || mensaje.Contains("LEFT", StringComparison.OrdinalIgnoreCase)
+               || mensaje.Contains("parámetro de longitud no válido", StringComparison.OrdinalIgnoreCase)
+               || mensaje.Contains("invalid length parameter", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool EsMensajeErrorSubstring(string? resultado)
+    {
+        if (string.IsNullOrWhiteSpace(resultado))
+        {
+            return false;
+        }
+
+        return resultado.Contains("SUBSTRING", StringComparison.OrdinalIgnoreCase)
+               || resultado.Contains("LEFT", StringComparison.OrdinalIgnoreCase)
+               || resultado.Contains("parámetro de longitud no válido", StringComparison.OrdinalIgnoreCase)
+               || resultado.Contains("invalid length parameter", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private async Task<int> ResolverCompaniaIdEdicionAsync(long notaId, int? companiaIdPropuesta, CancellationToken cancellationToken)
+    {
+        if (companiaIdPropuesta.HasValue && companiaIdPropuesta.Value > 0)
+        {
+            return companiaIdPropuesta.Value;
+        }
+
+        if (notaId <= 0)
+        {
+            return 0;
+        }
+
+        try
+        {
+            var existente = await _mediator.ObtenerPorIdAsync(notaId, cancellationToken);
+            if (existente?.CompaniaId is > 0)
+            {
+                return existente.CompaniaId.Value;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "No se pudo resolver CompaniaId para NotaId {NotaId}.", notaId);
+        }
+
+        return 0;
+    }
+
+    private static int? TryGetIntFromJson(JsonElement body, params string[] names)
+    {
+        if (body.ValueKind != JsonValueKind.Object || names.Length == 0)
+        {
+            return null;
+        }
+
+        foreach (var name in names)
+        {
+            if (!body.TryGetProperty(name, out var value))
+            {
+                continue;
+            }
+
+            if (value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var n))
+            {
+                return n;
+            }
+
+            if (value.ValueKind == JsonValueKind.String &&
+                int.TryParse(value.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed))
+            {
+                return parsed;
+            }
+        }
+
+        return null;
+    }
+
+    private static decimal? TryGetDecimalFromJson(JsonElement body, params string[] names)
+    {
+        if (body.ValueKind != JsonValueKind.Object || names.Length == 0)
+        {
+            return null;
+        }
+
+        foreach (var name in names)
+        {
+            if (!body.TryGetProperty(name, out var value))
+            {
+                continue;
+            }
+
+            if (value.ValueKind == JsonValueKind.Number && value.TryGetDecimal(out var n))
+            {
+                return n;
+            }
+
+            if (value.ValueKind == JsonValueKind.String &&
+                decimal.TryParse(value.GetString(), NumberStyles.Any, CultureInfo.InvariantCulture, out var parsed))
+            {
+                return parsed;
+            }
+        }
+
+        return null;
+    }
+
+    private static string? TryGetStringFromJson(JsonElement body, params string[] names)
+    {
+        if (body.ValueKind != JsonValueKind.Object || names.Length == 0)
+        {
+            return null;
+        }
+
+        foreach (var name in names)
+        {
+            if (!body.TryGetProperty(name, out var value))
+            {
+                continue;
+            }
+
+            if (value.ValueKind == JsonValueKind.String)
+            {
+                return value.GetString();
+            }
+        }
+
+        return null;
+    }
+
+    private static string? ExtractNotaEstado(JsonElement body)
+    {
+        if (body.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        if (body.TryGetProperty("NotaEstado", out var notaEstadoEl) && notaEstadoEl.ValueKind == JsonValueKind.String)
+        {
+            return notaEstadoEl.GetString();
+        }
+
+        if (body.TryGetProperty("Estado", out var estadoEl) && estadoEl.ValueKind == JsonValueKind.String)
+        {
+            return estadoEl.GetString();
+        }
+
+        return null;
+    }
+
+    private async Task ForzarEstadoNotaPostEdicionAsync(long notaId, string? estadoSolicitado, CancellationToken cancellationToken)
+    {
+        if (notaId <= 0 || string.IsNullOrWhiteSpace(estadoSolicitado))
+        {
+            return;
+        }
+
+        var estado = estadoSolicitado.Trim();
+        if (estado.Length == 0)
+        {
+            return;
+        }
+
+        var connectionString = _configuration.GetConnectionString("DefaultConnection");
+        if (string.IsNullOrWhiteSpace(connectionString))
+        {
+            return;
+        }
+
+        const string sql = """
+            UPDATE NotaPedido
+            SET NotaEstado = @Estado
+            WHERE NotaId = @NotaId;
+            """;
+
+        try
+        {
+            await using var con = new SqlConnection(connectionString);
+            await using var cmd = new SqlCommand(sql, con);
+            cmd.Parameters.AddWithValue("@Estado", estado);
+            cmd.Parameters.AddWithValue("@NotaId", notaId);
+            await con.OpenAsync(cancellationToken);
+            await cmd.ExecuteNonQueryAsync(cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "No se pudo forzar NotaEstado={Estado} para NotaId={NotaId} post-edición.", estado, notaId);
+        }
+    }
+
+    private async Task ForzarEstadoDetallePostEdicionAsync(long notaId, CancellationToken cancellationToken)
+    {
+        if (notaId <= 0)
+        {
+            return;
+        }
+
+        var connectionString = _configuration.GetConnectionString("DefaultConnection");
+        if (string.IsNullOrWhiteSpace(connectionString))
+        {
+            return;
+        }
+
+        const string sql = """
+            UPDATE d
+            SET d.Estado = CASE
+                               WHEN d.Estado IS NULL
+                                    OR LTRIM(RTRIM(d.Estado)) = ''
+                                    OR UPPER(LTRIM(RTRIM(d.Estado))) = 'S'
+                                   THEN 'E'
+                               ELSE d.Estado
+                           END,
+                d.CantidadSaldo = CASE
+                                      WHEN d.CantidadSaldo IS NULL THEN
+                                          CASE
+                                              WHEN UPPER(LTRIM(RTRIM(ISNULL(n.NotaEntrega, '')))) = 'INMEDIATA' THEN 0
+                                              ELSE ISNULL(d.DetalleCantidad, 0)
+                                          END
+                                      ELSE d.CantidadSaldo
+                                  END
+            FROM DetallePedido d
+            INNER JOIN NotaPedido n ON n.NotaId = d.NotaId
+            WHERE d.NotaId = @NotaId;
+            """;
+
+        try
+        {
+            await using var con = new SqlConnection(connectionString);
+            await using var cmd = new SqlCommand(sql, con);
+            cmd.Parameters.AddWithValue("@NotaId", notaId);
+            await con.OpenAsync(cancellationToken);
+            await cmd.ExecuteNonQueryAsync(cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "No se pudo forzar Estado/CantidadSaldo en DetallePedido para NotaId={NotaId} post-edición.", notaId);
+        }
     }
 
     private static string Format2(decimal value)
@@ -2050,17 +2593,44 @@ public class NotaController : ControllerBase
 
     private static string FormatDateForSql(DateTime? value)
     {
-        return (value ?? DateTime.Now).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        // SQL Server parses yyyymmdd consistently regardless of DATEFORMAT/LANGUAGE.
+        return (value ?? DateTime.Now).ToString("yyyyMMdd", CultureInfo.InvariantCulture);
     }
 
     private static string NormalizeDateValue(string rawDate)
     {
-        if (DateTime.TryParse(rawDate, out var parsed))
+        if (!string.IsNullOrWhiteSpace(rawDate))
         {
-            return parsed.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+            var formatos = new[]
+            {
+                "yyyy-MM-dd",
+                "yyyy/MM/dd",
+                "dd/MM/yyyy",
+                "dd-MM-yyyy",
+                "yyyyMMdd",
+                "yyyy-MM-ddTHH:mm:ss",
+                "yyyy-MM-ddTHH:mm:ss.fff",
+                "yyyy-MM-ddTHH:mm:ssZ",
+                "yyyy-MM-ddTHH:mm:ss.fffZ"
+            };
+
+            if (DateTime.TryParseExact(
+                    rawDate.Trim(),
+                    formatos,
+                    CultureInfo.InvariantCulture,
+                    DateTimeStyles.AllowWhiteSpaces | DateTimeStyles.AssumeLocal,
+                    out var parsedExact))
+            {
+                return parsedExact.ToString("yyyyMMdd", CultureInfo.InvariantCulture);
+            }
+
+            if (DateTime.TryParse(rawDate, out var parsed))
+            {
+                return parsed.ToString("yyyyMMdd", CultureInfo.InvariantCulture);
+            }
         }
 
-        return DateTime.Now.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        return DateTime.Now.ToString("yyyyMMdd", CultureInfo.InvariantCulture);
     }
 
     private static string GetFirstString(dynamic obj, params string[] names)
@@ -5212,6 +5782,214 @@ public class NotaController : ControllerBase
                || string.Equals(valor, "ok", StringComparison.OrdinalIgnoreCase);
     }
 
+    private static bool DebeNotificarWsEnEdicion(string? resultado)
+    {
+        if (EsResultadoEdicionExitosa(resultado))
+        {
+            return true;
+        }
+
+        if (string.IsNullOrWhiteSpace(resultado))
+        {
+            return true;
+        }
+
+        var valor = resultado.Trim();
+        if (string.Equals(valor, "error", StringComparison.OrdinalIgnoreCase))
+        {
+            // Compatibilidad legado: ExecuteScalar puede devolver vacío y el repo lo mapea a "error" aunque se actualice.
+            return true;
+        }
+
+        if (valor.Contains("se pasó un parámetro de longitud no válido", StringComparison.OrdinalIgnoreCase)
+            || valor.Contains("invalid length parameter", StringComparison.OrdinalIgnoreCase)
+            || valor.Contains("FOREIGN KEY", StringComparison.OrdinalIgnoreCase)
+            || valor.Contains("conflicto", StringComparison.OrdinalIgnoreCase)
+            || valor.Contains("exception", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    private static decimal ResolverTotalEdicion(NotaPedido nota, IEnumerable<DetalleNota> detalles)
+    {
+        if (nota.NotaTotal is > 0m)
+        {
+            return nota.NotaTotal.Value;
+        }
+
+        var totalDetalle = (detalles ?? Enumerable.Empty<DetalleNota>()).Sum(x => x.DetalleImporte ?? 0m);
+        return totalDetalle + (nota.ICBPER ?? 0m);
+    }
+
+    private static decimal ResolverTotalEdicion(JsonElement body)
+    {
+        var total = TryGetDecimalFromJson(body, "Total", "NotaTotal");
+        if (total is > 0m)
+        {
+            return total.Value;
+        }
+
+        var icbper = TryGetDecimalFromJson(body, "ICBPER") ?? 0m;
+        decimal totalDetalle = 0m;
+
+        if (body.ValueKind == JsonValueKind.Object)
+        {
+            if (!body.TryGetProperty("requestDetalle", out var detalleElement)
+                && !body.TryGetProperty("requestdetalle", out detalleElement)
+                && !body.TryGetProperty("detalles", out detalleElement)
+                && !body.TryGetProperty("Detalles", out detalleElement))
+            {
+                detalleElement = default;
+            }
+
+            if (detalleElement.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var item in detalleElement.EnumerateArray())
+                {
+                    totalDetalle += TryGetDecimalFromJson(item, "DetalleImporte", "importe") ?? 0m;
+                }
+            }
+        }
+
+        return totalDetalle + icbper;
+    }
+
+    private async Task NotificarEdicionWsLegacyAsync(long notaId, decimal monto, string? usuarioRaw, CancellationToken cancellationToken)
+    {
+        if (notaId <= 0)
+        {
+            return;
+        }
+
+        var usuario = usuarioRaw;
+        if (string.IsNullOrWhiteSpace(usuario))
+        {
+            usuario = User.FindFirst(ClaimTypes.Name)?.Value
+                      ?? User.FindFirst(ClaimTypes.NameIdentifier)?.Value
+                      ?? User.Identity?.Name
+                      ?? "SISTEMA";
+        }
+
+        var texto = $"Se Edito el Docu Nro {notaId} Monto S/ {monto.ToString("0.00", CultureInfo.InvariantCulture)}";
+        await EnviarMensajeWsLegacyAsync("* ", texto, usuario, cancellationToken);
+    }
+
+    private async Task NotificarRegistroWsLegacyAsync(NotaPedido? nota, string? resultadoRegistro, CancellationToken cancellationToken)
+    {
+        if (!EsResultadoRegistroExitoso(resultadoRegistro))
+        {
+            return;
+        }
+
+        var documento = string.IsNullOrWhiteSpace(nota?.NotaDocu) ? "DOCUMENTO" : nota.NotaDocu!.Trim();
+        var numero = nota is null
+            ? (ExtraerNotaIdDeRegistro(resultadoRegistro)?.ToString(CultureInfo.InvariantCulture) ?? "S/N")
+            : ResolverNumeroComprobanteDesdeRegistro(resultadoRegistro, nota.NotaNumero);
+        var monto = (nota?.NotaTotal ?? 0m).ToString("0.00", CultureInfo.InvariantCulture);
+
+        var usuarioBase = nota?.NotaUsuario;
+        if (string.IsNullOrWhiteSpace(usuarioBase))
+        {
+            usuarioBase = User.FindFirst(ClaimTypes.Name)?.Value
+                          ?? User.FindFirst(ClaimTypes.NameIdentifier)?.Value
+                          ?? User.Identity?.Name
+                          ?? "SISTEMA";
+        }
+
+        var usuario = NormalizarUsuarioWs(usuarioBase);
+        var texGuarda = $"Se Registro {documento} Nro {numero} Monto S/ {monto}";
+        await EnviarMensajeWsLegacyAsync("- ", texGuarda, usuario, cancellationToken);
+    }
+
+    private async Task EnviarMensajeWsLegacyAsync(string prefijo, string texto, string? usuarioRaw, CancellationToken cancellationToken)
+    {
+        var wsUrl = _configuration["LegacyWebSocket:Url"];
+        if (string.IsNullOrWhiteSpace(wsUrl))
+        {
+            wsUrl = "ws://192.168.100.44:9002";
+        }
+
+        if (!Uri.TryCreate(wsUrl, UriKind.Absolute, out var endpoint))
+        {
+            _logger.LogWarning("LegacyWebSocket:Url inválida: {WsUrl}", wsUrl);
+            return;
+        }
+
+        var usuario = NormalizarUsuarioWs(usuarioRaw);
+        var mensaje = string.Format("{0}{1}|{2}|{3}", prefijo, DateTime.Now.ToString(), usuario, texto);
+
+        try
+        {
+            await LegacyWsLock.WaitAsync(cancellationToken);
+            try
+            {
+                var endpointValue = endpoint.AbsoluteUri;
+                var requiereNuevaConexion = _legacyWsClient is null
+                                            || _legacyWsClient.State != WebSocketState.Open
+                                            || !string.Equals(_legacyWsEndpoint, endpointValue, StringComparison.OrdinalIgnoreCase);
+
+                if (requiereNuevaConexion)
+                {
+                    _legacyWsClient?.Dispose();
+                    _legacyWsClient = new ClientWebSocket();
+                    await _legacyWsClient.ConnectAsync(endpoint, cancellationToken);
+                    _legacyWsEndpoint = endpointValue;
+                }
+
+                var wsClient = _legacyWsClient;
+                if (wsClient is null)
+                {
+                    return;
+                }
+
+                var bytes = Encoding.Default.GetBytes(mensaje);
+                var data = new ArraySegment<byte>(bytes);
+                await wsClient.SendAsync(data, WebSocketMessageType.Text, true, cancellationToken);
+            }
+            finally
+            {
+                LegacyWsLock.Release();
+            }
+        }
+        catch (Exception ex)
+        {
+            try
+            {
+                _legacyWsClient?.Dispose();
+            }
+            catch
+            {
+                // ignore dispose errors
+            }
+
+            _legacyWsClient = null;
+            _legacyWsEndpoint = null;
+            _logger.LogWarning(ex, "No se pudo enviar mensaje al WS legado.");
+        }
+    }
+
+    private static bool EsResultadoRegistroExitoso(string? resultadoRegistro)
+    {
+        if (string.IsNullOrWhiteSpace(resultadoRegistro))
+        {
+            return false;
+        }
+
+        var valor = resultadoRegistro.Trim();
+        return !string.Equals(valor, "error", StringComparison.OrdinalIgnoreCase)
+               && !string.Equals(valor, "~", StringComparison.OrdinalIgnoreCase)
+               && !string.Equals(valor, "false", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string NormalizarUsuarioWs(string? usuario)
+    {
+        var valor = string.IsNullOrWhiteSpace(usuario) ? "SISTEMA" : usuario.Trim();
+        return valor.Replace('Ñ', 'N').Replace('ñ', 'n');
+    }
+
     private static bool EsDocumentoConIgv18(string? documento)
     {
         var valor = (documento ?? string.Empty).Trim().ToUpperInvariant();
@@ -6911,3 +7689,4 @@ public class EnviarResumenBoletasDetalleRequest
     public int? docuId { get; set; }
     public int? notaId { get; set; }
 }
+

@@ -60,18 +60,66 @@ public class PersonalRepository : IPersonal
         return await reader.ReadAsync(cancellationToken) ? MapPersonal(reader) : null;
     }
 
+    public async Task<PersonalCodigoResumen?> ObtenerResumenPorCodigoAsync(string personalCodigo, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(personalCodigo))
+        {
+            return null;
+        }
+
+        await using var con = new SqlConnection(_connectionString);
+        await using var cmd = new SqlCommand("uspObtenerPersonalPorCodigoResumen", con)
+        {
+            CommandTimeout = 300,
+            CommandType = CommandType.StoredProcedure
+        };
+        cmd.Parameters.AddWithValue("@PersonalCodigo", personalCodigo.Trim());
+
+        await con.OpenAsync(cancellationToken);
+        await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken))
+        {
+            return null;
+        }
+
+        return new PersonalCodigoResumen
+        {
+            PersonalId = reader["PersonalId"] == DBNull.Value ? 0 : Convert.ToInt64(reader["PersonalId"]),
+            PersonalEstado = reader["PersonalEstado"] == DBNull.Value ? null : reader["PersonalEstado"].ToString(),
+            NombreApellido = reader["NombreApellido"] == DBNull.Value ? null : reader["NombreApellido"].ToString()
+        };
+    }
+
     public async Task<IReadOnlyList<Personal>> ListarAsync(string? estado = "ACTIVO", int page = 1, int pageSize = 50, CancellationToken cancellationToken = default)
     {
         (page, pageSize) = NormalizePagination(page, pageSize);
 
         const string sql = """
+            ;WITH Paged AS (
+                SELECT PersonalId,
+                       PersonalNombres,
+                       PersonalApellidos,
+                       AreaId,
+                       PersonalCodigo,
+                       PersonalNacimiento,
+                       PersonalIngreso,
+                       PersonalDNI,
+                       PersonalDireccion,
+                       PersonalTelefono,
+                       PersonalEmail,
+                       PersonalEstado,
+                       PersonalImagen,
+                       CompaniaId,
+                       ROW_NUMBER() OVER (ORDER BY PersonalId DESC) AS RowNum
+                FROM Personal
+                WHERE (@Estado IS NULL OR PersonalEstado = @Estado)
+            )
             SELECT PersonalId, PersonalNombres, PersonalApellidos, AreaId, PersonalCodigo,
                    PersonalNacimiento, PersonalIngreso, PersonalDNI, PersonalDireccion,
                    PersonalTelefono, PersonalEmail, PersonalEstado, PersonalImagen, CompaniaId
-            FROM Personal
-            WHERE (@Estado IS NULL OR PersonalEstado = @Estado)
-            ORDER BY PersonalId DESC
-            OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY;
+            FROM Paged
+            WHERE RowNum BETWEEN @StartRow AND @EndRow
+            ORDER BY RowNum;
             """;
 
         await using var con = new SqlConnection(_connectionString);
@@ -81,8 +129,8 @@ public class PersonalRepository : IPersonal
             CommandType = CommandType.Text
         };
         cmd.Parameters.AddWithValue("@Estado", (object?)estado ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@Offset", (page - 1) * pageSize);
-        cmd.Parameters.AddWithValue("@PageSize", pageSize);
+        cmd.Parameters.AddWithValue("@StartRow", ((page - 1) * pageSize) + 1);
+        cmd.Parameters.AddWithValue("@EndRow", page * pageSize);
         await con.OpenAsync(cancellationToken);
         await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
 
