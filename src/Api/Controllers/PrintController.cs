@@ -13,8 +13,8 @@ namespace Ecommerce.Api.Controllers
             if (file == null || file.Length == 0)
                 return BadRequest(new { ok = false, message = "No se recibió el PDF" });
 
-            // string printerName = "EPSON TM-T(203dpi) Receipt";
-            string printerName = "EPSON TM-T20IV Receipt";
+            string printerName = "EPSON TM-T(203dpi) Receipt";
+            //string printerName = "EPSON TM-T20IV Receipt";
             string sumatraPath = @"C:\app\SumatraPDF\SumatraPDF.exe";
 
             string tempFolder = Path.Combine(Path.GetTempPath(), "PrintTemp");

@@ -1500,7 +1500,8 @@ public class NotaController : ControllerBase
             AplicarReglaTributariaDocumento(request.Nota, detalles);
             var vdataNota = BuildOrdenPayload(request.Nota, detalles);
             var resultado = await _mediator.RegistrarOrdenAsync(vdataNota, cancellationToken);
-            await NotificarRegistroWsLegacyAsync(request.Nota, resultado, cancellationToken);
+            // ponytail: aviso legado best-effort; nunca retrasa el guardado de la orden.
+            _ = NotificarRegistroWsLegacyAsync(request.Nota, resultado, CancellationToken.None);
 
             if (HabilitarEnvioOseAlRegistrarOrden && EsFactura(request.Nota.NotaDocu))
             {
@@ -1539,7 +1540,8 @@ public class NotaController : ControllerBase
 
         var vdata = BuildOrdenPayload(body);
         var resultadoRaw = await _mediator.RegistrarOrdenAsync(vdata, cancellationToken);
-        await NotificarRegistroWsLegacyAsync(nota: null, resultadoRaw, cancellationToken);
+        // ponytail: aviso legado best-effort; nunca retrasa el guardado de la orden.
+        _ = NotificarRegistroWsLegacyAsync(nota: null, resultadoRaw, CancellationToken.None);
         return Ok(resultadoRaw);
     }
 
@@ -5920,10 +5922,16 @@ public class NotaController : ControllerBase
 
         var usuario = NormalizarUsuarioWs(usuarioRaw);
         var mensaje = string.Format("{0}{1}|{2}|{3}", prefijo, DateTime.Now.ToString(), usuario, texto);
+        var lockAdquirido = false;
 
         try
         {
-            await LegacyWsLock.WaitAsync(cancellationToken);
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeoutCts.CancelAfter(TimeSpan.FromSeconds(1));
+            var wsCancellationToken = timeoutCts.Token;
+
+            await LegacyWsLock.WaitAsync(wsCancellationToken);
+            lockAdquirido = true;
             try
             {
                 var endpointValue = endpoint.AbsoluteUri;
@@ -5935,7 +5943,7 @@ public class NotaController : ControllerBase
                 {
                     _legacyWsClient?.Dispose();
                     _legacyWsClient = new ClientWebSocket();
-                    await _legacyWsClient.ConnectAsync(endpoint, cancellationToken);
+                    await _legacyWsClient.ConnectAsync(endpoint, wsCancellationToken);
                     _legacyWsEndpoint = endpointValue;
                 }
 
@@ -5947,7 +5955,7 @@ public class NotaController : ControllerBase
 
                 var bytes = Encoding.Default.GetBytes(mensaje);
                 var data = new ArraySegment<byte>(bytes);
-                await wsClient.SendAsync(data, WebSocketMessageType.Text, true, cancellationToken);
+                await wsClient.SendAsync(data, WebSocketMessageType.Text, true, wsCancellationToken);
             }
             finally
             {
@@ -5956,17 +5964,20 @@ public class NotaController : ControllerBase
         }
         catch (Exception ex)
         {
-            try
+            if (lockAdquirido)
             {
-                _legacyWsClient?.Dispose();
-            }
-            catch
-            {
-                // ignore dispose errors
-            }
+                try
+                {
+                    _legacyWsClient?.Dispose();
+                }
+                catch
+                {
+                    // ignore dispose errors
+                }
 
-            _legacyWsClient = null;
-            _legacyWsEndpoint = null;
+                _legacyWsClient = null;
+                _legacyWsEndpoint = null;
+            }
             _logger.LogWarning(ex, "No se pudo enviar mensaje al WS legado.");
         }
     }
