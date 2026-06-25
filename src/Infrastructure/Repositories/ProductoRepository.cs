@@ -23,9 +23,10 @@ public class ProductoRepository : IProducto
     public async Task<string> InsertarAsync(Producto producto, CancellationToken cancellationToken = default)
     {
         var rawData = (producto.Data ?? string.Empty).Trim();
+        var productoImagen = NormalizeImageName(producto.ProductoImagen);
         if (!string.IsNullOrWhiteSpace(rawData) && rawData.Contains('|'))
         {
-            rawData = ReplaceProductoImagenInRawData(rawData, producto.ProductoImagen);
+            rawData = ReplaceProductoImagenInRawData(rawData, productoImagen);
             var resultRaw = await _accesoDatos.EjecutarComandoAsync("uspIngresarProducto", "@Data", rawData, cancellationToken);
             return string.IsNullOrWhiteSpace(resultRaw) ? "error" : resultRaw;
         }
@@ -54,7 +55,7 @@ public class ProductoRepository : IProducto
             FormatDecimal(producto.ProductoCantidad),
             producto.ProductoEstado ?? string.Empty,
             producto.ProductoUsuario ?? string.Empty,
-            producto.ProductoImagen ?? string.Empty,
+            productoImagen ?? string.Empty,
             FormatDecimal(producto.ValorCritico),
             aplicaInv);
 
@@ -350,12 +351,7 @@ public class ProductoRepository : IProducto
 
             var idRaw = Field(fields, 0);
             var descripcion = Field(fields, 1);
-            var imagen = Field(fields, 4);
-            if (!string.IsNullOrWhiteSpace(imagen) &&
-                imagen.Contains("ArchivoSistema", StringComparison.OrdinalIgnoreCase))
-            {
-                imagen = string.Empty;
-            }
+            var imagen = NormalizeImageName(Field(fields, 4));
 
             result.Add(new ProductoListadoItem
             {
@@ -693,11 +689,6 @@ public class ProductoRepository : IProducto
 
     private static string ReplaceProductoImagenInRawData(string rawData, string? productoImagen)
     {
-        if (productoImagen is null)
-        {
-            return rawData;
-        }
-
         var openIndex = rawData.IndexOf('[');
         var closeIndex = rawData.LastIndexOf(']');
         var hasDetalle = openIndex >= 0 && closeIndex > openIndex;
@@ -709,9 +700,33 @@ public class ProductoRepository : IProducto
             return rawData;
         }
 
-        campos[11] = productoImagen.Trim();
+        campos[11] = NormalizeImageName(productoImagen ?? campos[11]) ?? string.Empty;
         var cabeceraActualizada = string.Join("|", campos);
         return hasDetalle ? $"{cabeceraActualizada}{rawData[openIndex..]}" : cabeceraActualizada;
+    }
+
+    private static string? NormalizeImageName(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        var normalized = value.Trim();
+        if (normalized.StartsWith("blob:", StringComparison.OrdinalIgnoreCase) ||
+            normalized.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        if (Uri.TryCreate(normalized, UriKind.Absolute, out var uri))
+        {
+            normalized = Uri.UnescapeDataString(uri.Segments.LastOrDefault() ?? string.Empty);
+        }
+
+        normalized = normalized.Replace('\\', '/');
+        var fileName = normalized.Split('/', StringSplitOptions.RemoveEmptyEntries).LastOrDefault();
+        return string.IsNullOrWhiteSpace(fileName) ? null : fileName.Trim();
     }
 
     private static async Task<bool> StoredProcedureHasParameterAsync(

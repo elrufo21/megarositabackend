@@ -1,7 +1,5 @@
 using System.Net;
 using Ecommerce.Application.Contracts.Productos;
-using Ecommerce.Application.Contracts.Infrastructure;
-using Ecommerce.Application.Models.ImageManagement;
 using Ecommerce.Domain;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -14,6 +12,7 @@ namespace Ecommerce.Api.Controllers;
 public class ProductosController : ControllerBase
 {
     private const long MaxImageSizeBytes = 5 * 1024 * 1024; // 5 MB
+    private const string ProductImageDirectory = @"D:\ArchivoSistema\ImagenesLogistica";
     private static readonly HashSet<string> AllowedImageContentTypes = new(StringComparer.OrdinalIgnoreCase)
     {
         "image/jpeg",
@@ -22,12 +21,12 @@ public class ProductosController : ControllerBase
     };
 
     private readonly IProducto _mediator;
-    private readonly IManageImageService _imageService;
+    private readonly ILogger<ProductosController> _logger;
 
-    public ProductosController(IProducto mediador, IManageImageService imageService)
+    public ProductosController(IProducto mediador, ILogger<ProductosController> logger)
     {
         _mediator = mediador;
-        _imageService = imageService;
+        _logger = logger;
     }
 
     [Authorize]
@@ -58,26 +57,24 @@ public class ProductosController : ControllerBase
                 return BadRequest(error);
             }
 
-            if (existente is not null && !string.IsNullOrWhiteSpace(existente.ProductoImagen))
+            var fileName = await SaveProductImageAsync(imagenRequest, cancellationToken);
+            if (fileName is null)
             {
-                await _imageService.DeleteImage(existente.ProductoImagen);
+                return StatusCode(StatusCodes.Status500InternalServerError, "No se pudo guardar la imagen del producto.");
             }
 
-            await using var stream = imagenRequest.OpenReadStream();
-            var imageData = new ImageData
+            if (existente is not null && !string.IsNullOrWhiteSpace(existente.ProductoImagen))
             {
-                ImageStream = stream,
-                Nombre = imagenRequest.FileName
-            };
+                DeleteProductImage(existente.ProductoImagen);
+            }
 
-            var uploadResult = await _imageService.UploadImage(imageData);
-            producto.ProductoImagen = uploadResult.Url;
+            producto.ProductoImagen = fileName;
         }
         else if (eliminarImagen)
         {
             if (existente is not null && !string.IsNullOrWhiteSpace(existente.ProductoImagen))
             {
-                await _imageService.DeleteImage(existente.ProductoImagen);
+                DeleteProductImage(existente.ProductoImagen);
             }
             producto.ProductoImagen = string.Empty;
         }
@@ -120,15 +117,13 @@ public class ProductosController : ControllerBase
                 return BadRequest(error);
             }
 
-            await using var stream = imagenRequest.OpenReadStream();
-            var imageData = new ImageData
+            var fileName = await SaveProductImageAsync(imagenRequest, cancellationToken);
+            if (fileName is null)
             {
-                ImageStream = stream,
-                Nombre = imagenRequest.FileName
-            };
+                return StatusCode(StatusCodes.Status500InternalServerError, "No se pudo guardar la imagen del producto.");
+            }
 
-            var uploadResult = await _imageService.UploadImage(imageData);
-            producto.ProductoImagen = uploadResult.Url;
+            producto.ProductoImagen = fileName;
         }
 
         var unidadImagenFiles = GetUnidadMedidaImageFiles(imagenUnidad);
@@ -168,15 +163,13 @@ public class ProductosController : ControllerBase
                 return BadRequest(error);
             }
 
-            await using var stream = imagen.OpenReadStream();
-            var imageData = new ImageData
+            var fileName = await SaveProductImageAsync(imagen, cancellationToken);
+            if (fileName is null)
             {
-                ImageStream = stream,
-                Nombre = imagen.FileName
-            };
+                return StatusCode(StatusCodes.Status500InternalServerError, "No se pudo guardar la imagen de la unidad.");
+            }
 
-            var uploadResult = await _imageService.UploadImage(imageData);
-            request.UnidadImagen = uploadResult.Url;
+            request.UnidadImagen = fileName;
         }
 
         var idUm = await _mediator.GuardarUnidadMedidaProductoAsync(request, cancellationToken);
@@ -194,7 +187,7 @@ public class ProductosController : ControllerBase
         var existente = await _mediator.ObtenerPorIdAsync(id, cancellationToken);
         if (existente is not null && !string.IsNullOrWhiteSpace(existente.ProductoImagen))
         {
-            await _imageService.DeleteImage(existente.ProductoImagen);
+            DeleteProductImage(existente.ProductoImagen);
         }
 
         return Ok(await _mediator.EliminarAsync(id, cancellationToken));
@@ -365,14 +358,13 @@ public class ProductosController : ControllerBase
                 campos.Add(string.Empty);
             }
 
-            await using var stream = file.OpenReadStream();
-            var uploadResult = await _imageService.UploadImage(new ImageData
+            var fileName = await SaveProductImageAsync(file, cancellationToken);
+            if (fileName is null)
             {
-                ImageStream = stream,
-                Nombre = string.IsNullOrWhiteSpace(file.FileName) ? $"producto-um-{Guid.NewGuid():N}" : file.FileName
-            });
+                return $"No se pudo guardar la imagen de unidad de medida ({file.Name}).";
+            }
 
-            campos[5] = uploadResult.Url ?? string.Empty;
+            campos[5] = fileName;
             items[i] = string.Join("|", campos);
             changed = true;
         }
@@ -437,5 +429,102 @@ public class ProductosController : ControllerBase
         }
 
         return false;
+    }
+
+    private async Task<string?> SaveProductImageAsync(IFormFile file, CancellationToken cancellationToken)
+    {
+        try
+        {
+            Directory.CreateDirectory(ProductImageDirectory);
+
+            var extension = NormalizeImageExtension(file);
+            var baseName = SanitizeFileName(Path.GetFileNameWithoutExtension(file.FileName));
+            if (string.IsNullOrWhiteSpace(baseName))
+            {
+                baseName = Guid.NewGuid().ToString("N");
+            }
+
+            var fileName = $"{baseName}{extension}";
+            var path = Path.Combine(ProductImageDirectory, fileName);
+            if (System.IO.File.Exists(path))
+            {
+                fileName = $"{baseName}-{Guid.NewGuid():N}{extension}";
+                path = Path.Combine(ProductImageDirectory, fileName);
+            }
+
+            await using var source = file.OpenReadStream();
+            await using var destination = System.IO.File.Create(path);
+            await source.CopyToAsync(destination, cancellationToken);
+            return fileName;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogError(ex, "No se pudo guardar la imagen en {Directory}", ProductImageDirectory);
+            return null;
+        }
+    }
+
+    private void DeleteProductImage(string? value)
+    {
+        var fileName = NormalizeStoredImageFileName(value);
+        if (string.IsNullOrWhiteSpace(fileName))
+        {
+            return;
+        }
+
+        try
+        {
+            var path = Path.Combine(ProductImageDirectory, fileName);
+            if (System.IO.File.Exists(path))
+            {
+                System.IO.File.Delete(path);
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex, "No se pudo eliminar la imagen {FileName}", fileName);
+        }
+    }
+
+    private static string NormalizeImageExtension(IFormFile file)
+    {
+        var extension = Path.GetExtension(file.FileName).ToLowerInvariant();
+        if (extension is ".jpg" or ".jpeg" or ".png" or ".webp")
+        {
+            return extension;
+        }
+
+        return file.ContentType.ToLowerInvariant() switch
+        {
+            "image/png" => ".png",
+            "image/webp" => ".webp",
+            _ => ".jpg"
+        };
+    }
+
+    private static string SanitizeFileName(string? value)
+    {
+        var invalidChars = Path.GetInvalidFileNameChars();
+        return new string((value ?? string.Empty)
+            .Where(c => !invalidChars.Contains(c))
+            .ToArray())
+            .Trim();
+    }
+
+    private static string? NormalizeStoredImageFileName(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        var normalized = value.Trim();
+        if (Uri.TryCreate(normalized, UriKind.Absolute, out var uri))
+        {
+            normalized = Uri.UnescapeDataString(uri.Segments.LastOrDefault() ?? string.Empty);
+        }
+
+        normalized = normalized.Replace('/', Path.DirectorySeparatorChar);
+        return Path.GetFileName(normalized);
     }
 }
