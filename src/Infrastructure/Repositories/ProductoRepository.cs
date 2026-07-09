@@ -10,6 +10,120 @@ namespace Ecommerce.Infrastructure.Persistence.Repositories;
 
 public class ProductoRepository : IProducto
 {
+    private const string ListarProductosAlmacenSql = """
+        ;WITH ProductosAlmacen AS
+        (
+            SELECT
+                s.IdStock,
+                s.AlmacenId,
+                a.AlmacenNombre,
+                s.IdProducto,
+                p.ProductoCodigo,
+                p.ProductoNombre,
+                p.ProductoMarca,
+                LTRIM(RTRIM(ISNULL(p.ProductoNombre, '') + ' ' + ISNULL(p.ProductoMarca, ''))) AS Descripcion,
+                s.Cantidad,
+                p.ProductoUM,
+                p.ProductoVenta,
+                p.ProductoVentaB,
+                p.ProductoCosto AS PrecioCosto,
+                CAST(1 AS DECIMAL(18,4)) AS ValorUM,
+                p.ValorCritico,
+                p.ProductoImagen,
+                p.ProductoUbicacion,
+                s.Usuario,
+                s.FechaEdicion,
+                s.Cantidad * ISNULL(p.ProductoCosto, 0) AS Inversion,
+                CAST(0 AS BIT) AS EsUnidadAlterna
+            FROM Stock s WITH (NOLOCK)
+            INNER JOIN Producto p WITH (NOLOCK) ON p.IdProducto = s.IdProducto
+            INNER JOIN Almacen a WITH (NOLOCK) ON a.AlmacenId = s.AlmacenId
+            WHERE s.Estado = 'BUENO'
+              AND s.Cantidad > 0
+              AND p.ProductoEstado = 'BUENO'
+              AND (@AlmacenId IS NULL OR @AlmacenId <= 0 OR s.AlmacenId = @AlmacenId)
+
+            UNION ALL
+
+            SELECT
+                s.IdStock,
+                s.AlmacenId,
+                a.AlmacenNombre,
+                s.IdProducto,
+                p.ProductoCodigo,
+                p.ProductoNombre,
+                p.ProductoMarca,
+                LTRIM(RTRIM(ISNULL(p.ProductoNombre, '') + ' ' + ISNULL(p.ProductoMarca, ''))) AS Descripcion,
+                s.Cantidad / NULLIF(u.ValorUM, 0) AS Cantidad,
+                u.UMDescripcion AS ProductoUM,
+                u.PrecioVenta AS ProductoVenta,
+                u.PrecioVentaB AS ProductoVentaB,
+                u.PrecioCosto,
+                u.ValorUM,
+                p.ValorCritico,
+                p.ProductoImagen,
+                p.ProductoUbicacion,
+                s.Usuario,
+                s.FechaEdicion,
+                s.Cantidad * ISNULL(p.ProductoCosto, 0) AS Inversion,
+                CAST(1 AS BIT) AS EsUnidadAlterna
+            FROM Stock s WITH (NOLOCK)
+            INNER JOIN Producto p WITH (NOLOCK) ON p.IdProducto = s.IdProducto
+            INNER JOIN UnidadMedida u WITH (NOLOCK) ON u.IdProducto = p.IdProducto
+            INNER JOIN Almacen a WITH (NOLOCK) ON a.AlmacenId = s.AlmacenId
+            WHERE s.Estado = 'BUENO'
+              AND s.Cantidad > 0
+              AND p.ProductoEstado = 'BUENO'
+              AND ISNULL(u.ValorUM, 0) > 0
+              AND (@AlmacenId IS NULL OR @AlmacenId <= 0 OR s.AlmacenId = @AlmacenId)
+        ),
+        Filtrados AS
+        (
+            SELECT *
+            FROM ProductosAlmacen
+            WHERE ISNULL(@Busqueda, '') = ''
+               OR Descripcion LIKE '%' + @Busqueda + '%'
+               OR ISNULL(ProductoCodigo, '') LIKE '%' + @Busqueda + '%'
+               OR ISNULL(ProductoMarca, '') LIKE '%' + @Busqueda + '%'
+               OR ISNULL(ProductoNombre, '') LIKE '%' + @Busqueda + '%'
+               OR ISNULL(AlmacenNombre, '') LIKE '%' + @Busqueda + '%'
+        ),
+        Paginados AS
+        (
+            SELECT
+                ROW_NUMBER() OVER (ORDER BY AlmacenNombre ASC, Descripcion ASC, ProductoUM ASC) AS RowNum,
+                COUNT(*) OVER () AS TotalRegistros,
+                *
+            FROM Filtrados
+        )
+        SELECT
+            TotalRegistros,
+            IdStock,
+            AlmacenId,
+            AlmacenNombre,
+            IdProducto,
+            ProductoCodigo,
+            ProductoNombre,
+            ProductoMarca,
+            Descripcion,
+            Cantidad,
+            ProductoUM,
+            ProductoVenta,
+            ProductoVentaB,
+            PrecioCosto,
+            ValorUM,
+            ValorCritico,
+            ProductoImagen,
+            ProductoUbicacion,
+            Usuario,
+            FechaEdicion,
+            Inversion,
+            EsUnidadAlterna
+        FROM Paginados
+        WHERE RowNum BETWEEN ((@Pagina - 1) * @TamanoPagina + 1) AND (@Pagina * @TamanoPagina)
+        ORDER BY RowNum;
+        """;
+
     private readonly string _connectionString;
     private readonly AccesoDatos _accesoDatos;
 
@@ -272,6 +386,140 @@ public class ProductoRepository : IProducto
         return Array.Empty<ProductoListadoItem>();
     }
 
+    public async Task<ProductoStockAlmacenesResponse> ConsultarStockAlmacenesAsync(
+        long idProducto,
+        decimal cantidad,
+        string unidad,
+        CancellationToken cancellationToken = default)
+    {
+        var data = string.Join("|",
+            idProducto.ToString(CultureInfo.InvariantCulture),
+            cantidad.ToString(CultureInfo.InvariantCulture),
+            unidad?.Trim() ?? string.Empty);
+        var raw = await _accesoDatos.EjecutarComandoConFallbackAsync(
+            new[]
+            {
+                ("dbo.uspVentanaStocks", "@Data"),
+                ("uspVentanaStocks", "@Data")
+            },
+            data,
+            cancellationToken);
+
+        return ParseStockAlmacenes(raw);
+    }
+
+    public async Task<IReadOnlyList<ProductoAlmacenListadoItem>> ListarProductosAlmacenAsync(
+        long? almacenId = null,
+        string? busqueda = "",
+        int pagina = 1,
+        int tamanoPagina = 50,
+        CancellationToken cancellationToken = default)
+    {
+        (pagina, tamanoPagina) = NormalizePagination(pagina, tamanoPagina);
+
+        try
+        {
+            return await ListarProductosAlmacenDesdeComandoAsync(
+                "web.listarProductosAlmacen",
+                CommandType.StoredProcedure,
+                almacenId,
+                busqueda,
+                pagina,
+                tamanoPagina,
+                cancellationToken);
+        }
+        catch (SqlException ex) when (IsMissingProcedureOrParameter(ex) || IsSchemaIncompatibility(ex))
+        {
+            return await ListarProductosAlmacenDesdeComandoAsync(
+                ListarProductosAlmacenSql,
+                CommandType.Text,
+                almacenId,
+                busqueda,
+                pagina,
+                tamanoPagina,
+                cancellationToken);
+        }
+    }
+
+    private async Task<IReadOnlyList<ProductoAlmacenListadoItem>> ListarProductosAlmacenDesdeComandoAsync(
+        string commandText,
+        CommandType commandType,
+        long? almacenId,
+        string? busqueda,
+        int pagina,
+        int tamanoPagina,
+        CancellationToken cancellationToken)
+    {
+        await using var con = new SqlConnection(_connectionString);
+        await using var cmd = new SqlCommand(commandText, con)
+        {
+            CommandType = commandType,
+            CommandTimeout = 300
+        };
+
+        cmd.Parameters.AddWithValue("@AlmacenId", almacenId is > 0 ? almacenId.Value : DBNull.Value);
+        cmd.Parameters.AddWithValue("@Busqueda", busqueda?.Trim() ?? string.Empty);
+        cmd.Parameters.AddWithValue("@Pagina", pagina);
+        cmd.Parameters.AddWithValue("@TamanoPagina", tamanoPagina);
+
+        await con.OpenAsync(cancellationToken);
+        await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+
+        var items = new List<ProductoAlmacenListadoItem>();
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            items.Add(MapProductoAlmacenListado(reader));
+        }
+
+        return items;
+    }
+
+    private static ProductoStockAlmacenesResponse ParseStockAlmacenes(string raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return new ProductoStockAlmacenesResponse();
+        }
+
+        var sections = raw.Split('[', 2);
+        var rowsRaw = sections[0].Split('¬', StringSplitOptions.RemoveEmptyEntries);
+        var items = new List<ProductoStockAlmacenItem>();
+        foreach (var row in rowsRaw.Skip(3))
+        {
+            if (row == "~")
+            {
+                continue;
+            }
+
+            var fields = row.Split('|');
+            if (fields.Length < 8)
+            {
+                continue;
+            }
+
+            items.Add(new ProductoStockAlmacenItem
+            {
+                IdStock = ToLong(fields, 0),
+                IdProducto = ToLong(fields, 1),
+                AlmacenNombre = ToNullableString(fields, 2),
+                Descripcion = ToNullableString(fields, 3),
+                Cantidad = ToDecimal(fields, 4),
+                Stock = ToDecimal(fields, 5),
+                UnidadMedida = ToNullableString(fields, 6),
+                ValorUM = ToDecimal(fields, 7)
+            });
+        }
+
+        var summary = sections.Length > 1 ? sections[1].Split('|') : Array.Empty<string>();
+        return new ProductoStockAlmacenesResponse
+        {
+            CantidadPedido = ToDecimal(summary, 0),
+            StockTienda = ToDecimal(summary, 1),
+            FaltaCompletar = ToDecimal(summary, 2),
+            Items = items
+        };
+    }
+
     private async Task<IReadOnlyList<ProductoListadoItem>?> TryListarProductosDesdeRawLegadoAsync(
         string? busqueda,
         CancellationToken cancellationToken)
@@ -507,6 +755,35 @@ public class ProductoRepository : IProducto
         };
     }
 
+    private static ProductoAlmacenListadoItem MapProductoAlmacenListado(SqlDataReader reader)
+    {
+        return new ProductoAlmacenListadoItem
+        {
+            TotalRegistros = ToInt32(reader, "TotalRegistros"),
+            IdStock = ToInt64(reader, "IdStock"),
+            AlmacenId = ToInt64(reader, "AlmacenId"),
+            AlmacenNombre = ToString(reader, "AlmacenNombre"),
+            IdProducto = ToInt64(reader, "IdProducto"),
+            ProductoCodigo = ToString(reader, "ProductoCodigo"),
+            ProductoNombre = ToString(reader, "ProductoNombre"),
+            ProductoMarca = ToString(reader, "ProductoMarca"),
+            Descripcion = ToString(reader, "Descripcion"),
+            Cantidad = ToNullableDecimal(reader, "Cantidad") ?? 0m,
+            ProductoUM = ToString(reader, "ProductoUM"),
+            ProductoVenta = ToNullableDecimal(reader, "ProductoVenta"),
+            ProductoVentaB = ToNullableDecimal(reader, "ProductoVentaB"),
+            PrecioCosto = ToNullableDecimal(reader, "PrecioCosto"),
+            ValorUM = ToNullableDecimal(reader, "ValorUM"),
+            ValorCritico = ToNullableDecimal(reader, "ValorCritico"),
+            ProductoImagen = ToString(reader, "ProductoImagen"),
+            ProductoUbicacion = ToString(reader, "ProductoUbicacion"),
+            Usuario = ToString(reader, "Usuario"),
+            FechaEdicion = ToNullableDateTime(reader, "FechaEdicion"),
+            Inversion = ToNullableDecimal(reader, "Inversion"),
+            EsUnidadAlterna = ToBoolean(reader, "EsUnidadAlterna")
+        };
+    }
+
     private static string? ToString(SqlDataReader reader, string columnName)
     {
         var value = reader[columnName];
@@ -544,6 +821,23 @@ public class ProductoRepository : IProducto
         }
 
         return Convert.ToDecimal(value, CultureInfo.InvariantCulture);
+    }
+
+    private static DateTime? ToNullableDateTime(SqlDataReader reader, string columnName)
+    {
+        var value = reader[columnName];
+        if (value == DBNull.Value)
+        {
+            return null;
+        }
+
+        return Convert.ToDateTime(value, CultureInfo.InvariantCulture);
+    }
+
+    private static bool ToBoolean(SqlDataReader reader, string columnName)
+    {
+        var value = reader[columnName];
+        return value != DBNull.Value && Convert.ToBoolean(value, CultureInfo.InvariantCulture);
     }
 
     private static IReadOnlyList<EListaProducto> ApplyPagination(IReadOnlyList<EListaProducto> source, int page, int pageSize)
@@ -703,6 +997,20 @@ public class ProductoRepository : IProducto
         campos[11] = NormalizeImageName(productoImagen ?? campos[11]) ?? string.Empty;
         var cabeceraActualizada = string.Join("|", campos);
         return hasDetalle ? $"{cabeceraActualizada}{rawData[openIndex..]}" : cabeceraActualizada;
+    }
+
+    private static decimal ToDecimal(string[] campos, int index)
+    {
+        var value = ToNullableString(campos, index);
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return 0m;
+        }
+
+        var cleaned = value.Trim().Replace(",", string.Empty);
+        return decimal.TryParse(cleaned, NumberStyles.Any, CultureInfo.InvariantCulture, out var parsed)
+            ? parsed
+            : 0m;
     }
 
     private static string? NormalizeImageName(string? value)

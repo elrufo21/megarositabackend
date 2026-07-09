@@ -26,6 +26,17 @@ public interface IProducto
     Task<IReadOnlyList<ProductoListadoItem>> ListarProductosAsync(
         string? busqueda = "",
         CancellationToken cancellationToken = default);
+    Task<ProductoStockAlmacenesResponse> ConsultarStockAlmacenesAsync(
+        long idProducto,
+        decimal cantidad,
+        string unidad,
+        CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<ProductoAlmacenListadoItem>> ListarProductosAlmacenAsync(
+        long? almacenId = null,
+        string? busqueda = "",
+        int pagina = 1,
+        int tamanoPagina = 50,
+        CancellationToken cancellationToken = default);
     Task<long> GuardarUnidadMedidaProductoAsync(
         GuardarUnidadMedidaProductoRequest request,
         CancellationToken cancellationToken = default);

@@ -246,6 +246,31 @@ public class ProductosController : ControllerBase
         return Ok(await _mediator.ListarProductosAsync(busqueda, cancellationToken));
     }
 
+    [AllowAnonymous]
+    [HttpGet("{id:long}/stock-almacenes", Name = "ConsultarStockAlmacenes")]
+    [ProducesResponseType(typeof(ProductoStockAlmacenesResponse), (int)HttpStatusCode.OK)]
+    public async Task<ActionResult<ProductoStockAlmacenesResponse>> ConsultarStockAlmacenes(
+        long id,
+        [FromQuery] decimal cantidad = 0,
+        [FromQuery] string unidad = "",
+        CancellationToken cancellationToken = default)
+    {
+        return Ok(await _mediator.ConsultarStockAlmacenesAsync(id, cantidad, unidad, cancellationToken));
+    }
+
+    [AllowAnonymous]
+    [HttpGet("almacen-productos", Name = "ListarProductosAlmacen")]
+    [ProducesResponseType(typeof(IReadOnlyList<ProductoAlmacenListadoItem>), (int)HttpStatusCode.OK)]
+    public async Task<ActionResult<IReadOnlyList<ProductoAlmacenListadoItem>>> ListarProductosAlmacen(
+        [FromQuery] long? almacenId = null,
+        [FromQuery] string? busqueda = "",
+        [FromQuery] int pagina = 1,
+        [FromQuery] int tamanoPagina = 50,
+        CancellationToken cancellationToken = default)
+    {
+        return Ok(await _mediator.ListarProductosAlmacenAsync(almacenId, busqueda, pagina, tamanoPagina, cancellationToken));
+    }
+
     private static bool IsValidImage(IFormFile file, out string error)
     {
         if (file.Length > MaxImageSizeBytes)
