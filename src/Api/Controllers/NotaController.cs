@@ -1650,6 +1650,11 @@ public class NotaController : ControllerBase
             var vdataNotaLegacy = BuildEditarPayloadLegacy(request.Nota, detalles);
             var resultado = await EjecutarEditarOrdenConFallbackAsync(vdataNota, vdataNotaLegacy, cancellationToken);
 
+            await ActualizarAuditoriaPostEdicionAsync(
+                request.Nota.NotaId,
+                request.Nota.ModificadoPor ?? request.Nota.NotaUsuario,
+                request.Nota.FechaEdita,
+                cancellationToken);
             await ForzarEstadoNotaPostEdicionAsync(
                 request.Nota.NotaId,
                 request.Nota.NotaEstado,
@@ -1684,6 +1689,11 @@ public class NotaController : ControllerBase
 
         var notaIdEstado = TryGetIntFromJson(body, "NotaId", "NotaIDBR", "NotaIdbr", "IDBR") ?? 0;
         var estadoBody = ExtractNotaEstado(body);
+        await ActualizarAuditoriaPostEdicionAsync(
+            notaIdEstado,
+            TryGetStringFromJson(body, "ModificadoPor", "modificadoPor", "Usuario", "NotaUsuario"),
+            null,
+            cancellationToken);
         await ForzarEstadoNotaPostEdicionAsync(notaIdEstado, estadoBody, cancellationToken);
         await ForzarEstadoDetallePostEdicionAsync(notaIdEstado, cancellationToken);
         var notificarEdicionRaw = DebeNotificarWsEnEdicion(resultadoRaw);
@@ -2526,6 +2536,44 @@ public class NotaController : ControllerBase
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "No se pudo forzar NotaEstado={Estado} para NotaId={NotaId} post-edición.", estado, notaId);
+        }
+    }
+
+    private async Task ActualizarAuditoriaPostEdicionAsync(long notaId, string? modificadoPor, DateTime? fechaEdita, CancellationToken cancellationToken)
+    {
+        if (notaId <= 0 || string.IsNullOrWhiteSpace(modificadoPor))
+        {
+            return;
+        }
+
+        var connectionString = _configuration.GetConnectionString("DefaultConnection");
+        if (string.IsNullOrWhiteSpace(connectionString))
+        {
+            return;
+        }
+
+        const string sql = """
+            UPDATE NotaPedido
+            SET ModificadoPor = @ModificadoPor,
+                FechaEdita = @FechaEdita
+            WHERE NotaId = @NotaId;
+            """;
+
+        try
+        {
+            await using var con = new SqlConnection(connectionString);
+            await using var cmd = new SqlCommand(sql, con);
+            cmd.Parameters.AddWithValue("@ModificadoPor", modificadoPor.Trim());
+            cmd.Parameters.AddWithValue(
+                "@FechaEdita",
+                (fechaEdita ?? DateTime.Now).ToString("dd/MM/yyyy HH:mm:ss", CultureInfo.InvariantCulture));
+            cmd.Parameters.AddWithValue("@NotaId", notaId);
+            await con.OpenAsync(cancellationToken);
+            await cmd.ExecuteNonQueryAsync(cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "No se pudo actualizar auditoria de edicion para NotaId={NotaId}.", notaId);
         }
     }
 
