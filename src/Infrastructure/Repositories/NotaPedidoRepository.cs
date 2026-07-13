@@ -554,7 +554,7 @@ public class NotaPedidoRepository : INotaPedido
         cmdDet.Parameters.AddWithValue("@NotaId", id);
         await cmdDet.ExecuteNonQueryAsync(cancellationToken);
 
-        const string sqlDeleteNota = "DELETE FROM NotaPedido WHERE NotaId = @Id";
+        const string sqlDeleteNota = "DELETE FROM NotaPedido WHERE NotaPedido.NotaId = @Id";
         await using var cmd = new SqlCommand(sqlDeleteNota, con, tx);
         cmd.Parameters.AddWithValue("@Id", id);
         var rows = await cmd.ExecuteNonQueryAsync(cancellationToken);
@@ -572,7 +572,7 @@ public class NotaPedidoRepository : INotaPedido
     {
         const string sql = @"SELECT NotaId,
                                     NotaDocu,
-                                    ClienteId,
+                                    NotaPedido.ClienteId,
                                     NotaFecha,
                                     NotaUsuario,
                                     NotaFormaPago,
@@ -600,6 +600,12 @@ public class NotaPedidoRepository : INotaPedido
                                     NotaGanancia,
                                     ICBPER,
                                     CajaId,
+                                    c.ClienteRazon,
+                                    c.ClienteRuc,
+                                    c.ClienteDni,
+                                    c.ClienteDireccion,
+                                    c.ClienteDespacho,
+                                    COALESCE(c.ClienteMovil, c.ClienteTelefono) AS ClienteTelefono,
                                     (
                                         SELECT TOP (1) d.EstadoSunat
                                         FROM DocumentoVenta d
@@ -607,7 +613,8 @@ public class NotaPedidoRepository : INotaPedido
                                         ORDER BY d.DocuId DESC
                                     ) AS EstadoSunat
                              FROM NotaPedido
-                             WHERE NotaId = @Id";
+                             LEFT JOIN Cliente c ON c.ClienteId = NotaPedido.ClienteId
+                             WHERE NotaPedido.NotaId = @Id";
 
         await using var con = new SqlConnection(_connectionString);
         await using var cmd = new SqlCommand(sql, con);
@@ -674,7 +681,7 @@ public class NotaPedidoRepository : INotaPedido
                              )
                              SELECT NotaId,
                                     NotaDocu,
-                                    ClienteId,
+                                    NotaPedido.ClienteId,
                                     NotaFecha,
                                     NotaUsuario,
                                     NotaFormaPago,
@@ -1047,8 +1054,25 @@ public class NotaPedidoRepository : INotaPedido
             NotaGanancia = reader["NotaGanancia"] == DBNull.Value ? null : Convert.ToDecimal(reader["NotaGanancia"]),
             ICBPER = reader["ICBPER"] == DBNull.Value ? null : Convert.ToDecimal(reader["ICBPER"]),
             CajaId = ToNullableInt(reader["CajaId"]),
-            EstadoSunat = reader["EstadoSunat"] == DBNull.Value ? null : reader["EstadoSunat"].ToString()
+            EstadoSunat = reader["EstadoSunat"] == DBNull.Value ? null : reader["EstadoSunat"].ToString(),
+            ClienteRazon = GetNullableString(reader, "ClienteRazon"),
+            ClienteRuc = GetNullableString(reader, "ClienteRuc"),
+            ClienteDni = GetNullableString(reader, "ClienteDni"),
+            ClienteDireccion = GetNullableString(reader, "ClienteDireccion"),
+            ClienteDespacho = GetNullableString(reader, "ClienteDespacho"),
+            ClienteTelefono = GetNullableString(reader, "ClienteTelefono")
         };
+    }
+
+    private static string? GetNullableString(SqlDataReader reader, string name)
+    {
+        for (var i = 0; i < reader.FieldCount; i++)
+        {
+            if (!string.Equals(reader.GetName(i), name, StringComparison.OrdinalIgnoreCase)) continue;
+            return reader.IsDBNull(i) ? null : reader.GetValue(i).ToString();
+        }
+
+        return null;
     }
 
     private static DateTime? ToNullableDate(object? value)
@@ -1110,3 +1134,4 @@ public class NotaPedidoRepository : INotaPedido
         return (normalizedPage, normalizedPageSize);
     }
 }
+

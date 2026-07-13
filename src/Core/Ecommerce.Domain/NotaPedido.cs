@@ -37,4 +37,10 @@ public class NotaPedido
     public decimal? Efectivo { get; set; }
     public decimal? Deposito { get; set; }
     public string? EstadoSunat { get; set; }
+    public string? ClienteRazon { get; set; }
+    public string? ClienteRuc { get; set; }
+    public string? ClienteDni { get; set; }
+    public string? ClienteDireccion { get; set; }
+    public string? ClienteDespacho { get; set; }
+    public string? ClienteTelefono { get; set; }
 }
