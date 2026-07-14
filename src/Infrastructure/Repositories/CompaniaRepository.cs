@@ -292,6 +292,7 @@ public class CompaniaRepository : ICompania
                        CompaniaRazonSocial,
                        ROW_NUMBER() OVER (ORDER BY CompaniaId DESC) AS RowNum
                 FROM Compania
+                WHERE Estado = 1
             )
             SELECT CompaniaId, CompaniaRazonSocial
             FROM Paged
