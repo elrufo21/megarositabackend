@@ -1,4 +1,4 @@
--- Patch NotaPedido FlagMovil + fix uspinsertarNotaB
+-- Patch NotaPedido FlagMovil + estado BOLETA + fix uspinsertarNotaB
 -- Ejecutar en la BD destino, por ejemplo: MEGAROSITAB_ACT.
 
 IF COL_LENGTH('dbo.NotaPedido', 'FlagMovil') IS NULL
@@ -12,6 +12,14 @@ GO
 UPDATE dbo.NotaPedido
 SET FlagMovil = 0
 WHERE FlagMovil IS NULL;
+GO
+
+
+UPDATE n
+SET n.NotaEstado = 'EMITIDO'
+FROM dbo.NotaPedido n
+WHERE UPPER(LTRIM(RTRIM(ISNULL(n.NotaDocu, '')))) = 'BOLETA'
+  AND UPPER(LTRIM(RTRIM(ISNULL(n.NotaEstado, '')))) = 'PENDIENTE';
 GO
 
 
@@ -110,6 +118,7 @@ set @NotaAdicional=convert(decimal(18,2),SUBSTRING(@orden,@c13+1,@c14-@c13-1))
 set @NotaTarjeta=convert(decimal(18,2),SUBSTRING(@orden,@c14+1,@c15-@c14-1))      
 set @NotaPagar=convert(decimal(18,2),SUBSTRING(@orden,@c15+1,@c16-@c15-1))      
 set @NotaEstado=SUBSTRING(@orden,@c16+1,@c17-@c16-1)      
+if upper(ltrim(rtrim(isnull(@NotaDocu,''))))='BOLETA' set @NotaEstado='EMITIDO'
 set @CompaniaId=convert(int,SUBSTRING(@orden,@c17+1,@c18-@c17-1))      
 set @NotaEntrega=SUBSTRING(@orden,@c18+1,@c19-@c18-1)      
 set @NotaConcepto=SUBSTRING(@orden,@c19+1,@c20-@c19-1)      

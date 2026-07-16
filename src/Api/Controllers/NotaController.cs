@@ -1772,6 +1772,7 @@ public class NotaController : ControllerBase
         var usuarioId = "7";
         var docuGravada = calculoTributario.Gravada;
         var docuDescuento = 0m;
+        var notaEstado = EsBoleta(xDocumento) ? "EMITIDO" : (nota.NotaEstado ?? "PENDIENTE");
 
         var headerFields = new List<string?>
         {
@@ -1791,7 +1792,7 @@ public class NotaController : ControllerBase
             Format2(adicional),
             Format2(tarjeta),
             Format2(pagar),
-            nota.NotaEstado ?? "PENDIENTE",
+            notaEstado,
             nota.CompaniaId?.ToString(),
             nota.NotaEntrega,
             nota.NotaConcepto,
@@ -1983,6 +1984,7 @@ public class NotaController : ControllerBase
         var pagar = GetFirstDecimal(res, total, "Pagar", "NotaPagar", "PagoTotal");
         var estado = GetFirstString(res, "Estado", "NotaEstado", "EstadoSunat");
         if (string.IsNullOrWhiteSpace(estado)) estado = "PENDIENTE";
+        if (EsBoleta(docu)) estado = "EMITIDO";
         var companiaId = GetFirstString(res, "CompaniaId");
         var entrega = GetFirstString(res, "Entrega", "NotaEntrega");
         var concepto = GetFirstString(res, "Concepto", "NotaConcepto");
