@@ -1500,6 +1500,10 @@ public class NotaController : ControllerBase
             AplicarReglaTributariaDocumento(request.Nota, detalles);
             var vdataNota = BuildOrdenPayload(request.Nota, detalles);
             var resultado = await _mediator.RegistrarOrdenAsync(vdataNota, cancellationToken);
+            await MarcarFlagMovilSiCorrespondeAsync(
+                ExtraerNotaIdDeRegistro(resultado) ?? request.Nota.NotaId,
+                request.Nota.FlagMovil,
+                cancellationToken);
             // ponytail: aviso legado best-effort; nunca retrasa el guardado de la orden.
             _ = NotificarRegistroWsLegacyAsync(request.Nota, resultado, CancellationToken.None);
 
@@ -1540,6 +1544,10 @@ public class NotaController : ControllerBase
 
         var vdata = BuildOrdenPayload(body);
         var resultadoRaw = await _mediator.RegistrarOrdenAsync(vdata, cancellationToken);
+        await MarcarFlagMovilSiCorrespondeAsync(
+            ExtraerNotaIdDeRegistro(resultadoRaw) ?? 0,
+            TryGetIntFromJson(body, "FlagMovil", "flagMovil"),
+            cancellationToken);
         // ponytail: aviso legado best-effort; nunca retrasa el guardado de la orden.
         _ = NotificarRegistroWsLegacyAsync(nota: null, resultadoRaw, CancellationToken.None);
         return Ok(resultadoRaw);
@@ -1576,6 +1584,10 @@ public class NotaController : ControllerBase
             AplicarReglaTributariaDocumento(request.Nota, detalles);
             var vdataNota = BuildOrdenPayload(request.Nota, detalles);
             var resultado = await _mediator.RegistrarOrdenAsync(vdataNota, cancellationToken);
+            await MarcarFlagMovilSiCorrespondeAsync(
+                ExtraerNotaIdDeRegistro(resultado) ?? request.Nota.NotaId,
+                request.Nota.FlagMovil,
+                cancellationToken);
 
             if (HabilitarEnvioOseAlRegistrarOrden && EsFactura(request.Nota.NotaDocu))
             {
@@ -1613,7 +1625,12 @@ public class NotaController : ControllerBase
         }
 
         var vdata = BuildOrdenPayload(body);
-        return Ok(await _mediator.RegistrarOrdenAsync(vdata, cancellationToken));
+        var resultadoRaw = await _mediator.RegistrarOrdenAsync(vdata, cancellationToken);
+        await MarcarFlagMovilSiCorrespondeAsync(
+            ExtraerNotaIdDeRegistro(resultadoRaw) ?? 0,
+            TryGetIntFromJson(body, "FlagMovil", "flagMovil"),
+            cancellationToken);
+        return Ok(resultadoRaw);
     }
 
     [Authorize]
@@ -1659,6 +1676,10 @@ public class NotaController : ControllerBase
                 request.Nota.NotaId,
                 request.Nota.NotaEstado,
                 cancellationToken);
+            await MarcarFlagMovilSiCorrespondeAsync(
+                request.Nota.NotaId,
+                request.Nota.FlagMovil,
+                cancellationToken);
             await ForzarEstadoDetallePostEdicionAsync(request.Nota.NotaId, cancellationToken);
 
             var notificarEdicion = DebeNotificarWsEnEdicion(resultado);
@@ -1695,6 +1716,10 @@ public class NotaController : ControllerBase
             null,
             cancellationToken);
         await ForzarEstadoNotaPostEdicionAsync(notaIdEstado, estadoBody, cancellationToken);
+        await MarcarFlagMovilSiCorrespondeAsync(
+            notaIdEstado,
+            TryGetIntFromJson(body, "FlagMovil", "flagMovil"),
+            cancellationToken);
         await ForzarEstadoDetallePostEdicionAsync(notaIdEstado, cancellationToken);
         var notificarEdicionRaw = DebeNotificarWsEnEdicion(resultadoRaw);
         _logger.LogInformation(
@@ -2536,6 +2561,39 @@ public class NotaController : ControllerBase
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "No se pudo forzar NotaEstado={Estado} para NotaId={NotaId} post-edición.", estado, notaId);
+        }
+    }
+
+    private async Task MarcarFlagMovilSiCorrespondeAsync(long notaId, int? flagMovil, CancellationToken cancellationToken)
+    {
+        if (notaId <= 0 || flagMovil.GetValueOrDefault() != 1)
+        {
+            return;
+        }
+
+        var connectionString = _configuration.GetConnectionString("DefaultConnection");
+        if (string.IsNullOrWhiteSpace(connectionString))
+        {
+            return;
+        }
+
+        const string sql = """
+            UPDATE NotaPedido
+            SET FlagMovil = 1
+            WHERE NotaId = @NotaId;
+            """;
+
+        try
+        {
+            await using var con = new SqlConnection(connectionString);
+            await using var cmd = new SqlCommand(sql, con);
+            cmd.Parameters.AddWithValue("@NotaId", notaId);
+            await con.OpenAsync(cancellationToken);
+            await cmd.ExecuteNonQueryAsync(cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "No se pudo marcar FlagMovil para NotaId={NotaId}.", notaId);
         }
     }
 
