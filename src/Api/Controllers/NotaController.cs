@@ -1808,6 +1808,10 @@ public class NotaController : ControllerBase
             Format2(docuGravada),
             Format2(docuDescuento)
         };
+        if (nota.FlagMovil.HasValue)
+        {
+            headerFields.Add(nota.FlagMovil.Value == 1 ? "1" : "0");
+        }
 
         var vdata = string.Join("|", headerFields) + "[";
 
@@ -2001,6 +2005,7 @@ public class NotaController : ControllerBase
         if (string.IsNullOrWhiteSpace(usuarioId)) usuarioId = "7";
         var docuGravada = GetFirstDecimal(res, ResolverDocuGravada(docu, docuSubtotal, total, movilidad, adicional, descuento, icbper), "DocuGravada", "Gravada");
         var docuDescuento = GetFirstDecimal(res, ResolverDocuDescuento(docu, descuento), "DocuDescuento");
+        var flagMovil = TryGetIntFromJson(body, "FlagMovil", "flagMovil");
 
         var headerFields = new List<string?>
         {
@@ -2038,6 +2043,10 @@ public class NotaController : ControllerBase
             Format2(docuGravada),
             Format2(docuDescuento)
         };
+        if (flagMovil.HasValue)
+        {
+            headerFields.Add(flagMovil.Value == 1 ? "1" : "0");
+        }
 
         var vdata = string.Join("|", headerFields) + "[";
 
@@ -2574,7 +2583,7 @@ public class NotaController : ControllerBase
 
     private async Task MarcarFlagMovilSiCorrespondeAsync(long notaId, int? flagMovil, CancellationToken cancellationToken)
     {
-        if (notaId <= 0 || flagMovil.GetValueOrDefault() != 1)
+        if (notaId <= 0 || flagMovil is null)
         {
             return;
         }
@@ -2587,7 +2596,7 @@ public class NotaController : ControllerBase
 
         const string sql = """
             UPDATE NotaPedido
-            SET FlagMovil = 1
+            SET FlagMovil = @FlagMovil
             WHERE NotaId = @NotaId;
             """;
 
@@ -2595,6 +2604,7 @@ public class NotaController : ControllerBase
         {
             await using var con = new SqlConnection(connectionString);
             await using var cmd = new SqlCommand(sql, con);
+            cmd.Parameters.AddWithValue("@FlagMovil", flagMovil.Value == 1 ? 1 : 0);
             cmd.Parameters.AddWithValue("@NotaId", notaId);
             await con.OpenAsync(cancellationToken);
             await cmd.ExecuteNonQueryAsync(cancellationToken);

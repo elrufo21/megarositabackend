@@ -918,7 +918,8 @@ public class NotaPedidoRepository : INotaPedido
                                            NotaNumero = @NotaNumero,
                                            NotaGanancia = @NotaGanancia,
                                            ICBPER = @ICBPER,
-                                           CajaId = @CajaId
+                                           CajaId = @CajaId,
+                                           FlagMovil = @FlagMovil
                                        WHERE NotaId = @NotaId";
 
             await using var cmd = new SqlCommand(sqlUpdate, con, tx);
@@ -933,12 +934,12 @@ public class NotaPedidoRepository : INotaPedido
                                      NotaFechaPago, NotaDireccion, NotaTelefono, NotaSubtotal, NotaMovilidad,
                                      NotaDescuento, NotaTotal, NotaAcuenta, NotaSaldo, NotaAdicional, NotaTarjeta,
                                      NotaPagar, NotaEstado, CompaniaId, NotaEntrega, ModificadoPor, FechaEdita,
-                                     NotaConcepto, NotaSerie, NotaNumero, NotaGanancia, ICBPER, CajaId)
+                                      NotaConcepto, NotaSerie, NotaNumero, NotaGanancia, ICBPER, CajaId, FlagMovil)
                                VALUES (@NotaDocu, @ClienteId, @NotaFecha, @NotaUsuario, @NotaFormaPago, @NotaCondicion,
                                        @NotaFechaPago, @NotaDireccion, @NotaTelefono, @NotaSubtotal, @NotaMovilidad,
                                        @NotaDescuento, @NotaTotal, @NotaAcuenta, @NotaSaldo, @NotaAdicional, @NotaTarjeta,
                                        @NotaPagar, @NotaEstado, @CompaniaId, @NotaEntrega, @ModificadoPor, @FechaEdita,
-                                       @NotaConcepto, @NotaSerie, @NotaNumero, @NotaGanancia, @ICBPER, @CajaId);
+                                        @NotaConcepto, @NotaSerie, @NotaNumero, @NotaGanancia, @ICBPER, @CajaId, @FlagMovil);
                                SELECT SCOPE_IDENTITY();";
 
         await using var insertCmd = new SqlCommand(sqlInsert, con, tx);
@@ -1042,6 +1043,7 @@ public class NotaPedidoRepository : INotaPedido
         AddParam(cmd, "@NotaGanancia", notaPedido.NotaGanancia);
         AddParam(cmd, "@ICBPER", notaPedido.ICBPER);
         AddParam(cmd, "@CajaId", notaPedido.CajaId);
+        AddParam(cmd, "@FlagMovil", notaPedido.FlagMovil == 1 ? 1 : 0);
     }
 
     private static void AddParam(SqlCommand cmd, string name, object? value)
