@@ -1497,7 +1497,6 @@ public class NotaController : ControllerBase
                 return BadRequest("NotaPedido requerida.");
             }
             var detalles = request.Detalles ?? new List<DetalleNota>();
-            AplicarReglaTributariaDocumento(request.Nota, detalles);
             var vdataNota = BuildOrdenPayload(request.Nota, detalles);
             var resultado = await _mediator.RegistrarOrdenAsync(vdataNota, cancellationToken);
             await MarcarFlagMovilSiCorrespondeAsync(
@@ -1581,7 +1580,6 @@ public class NotaController : ControllerBase
                 return BadRequest("NotaPedido requerida.");
             }
             var detalles = request.Detalles ?? new List<DetalleNota>();
-            AplicarReglaTributariaDocumento(request.Nota, detalles);
             var vdataNota = BuildOrdenPayload(request.Nota, detalles);
             var resultado = await _mediator.RegistrarOrdenAsync(vdataNota, cancellationToken);
             await MarcarFlagMovilSiCorrespondeAsync(
@@ -1662,7 +1660,6 @@ public class NotaController : ControllerBase
                 request.Nota.CompaniaId = companiaResuelta;
             }
 
-            AplicarReglaTributariaDocumento(request.Nota, detalles);
             var vdataNota = BuildEditarPayload(request.Nota, detalles);
             var vdataNotaLegacy = BuildEditarPayloadLegacy(request.Nota, detalles);
             var resultado = await EjecutarEditarOrdenConFallbackAsync(vdataNota, vdataNotaLegacy, cancellationToken);
@@ -1680,6 +1677,7 @@ public class NotaController : ControllerBase
                 request.Nota.NotaId,
                 request.Nota.FlagMovil,
                 cancellationToken);
+            await SincronizarDetallesProformaPostEdicionAsync(request.Nota, detalles, cancellationToken);
             await ForzarEstadoDetallePostEdicionAsync(request.Nota.NotaId, cancellationToken);
 
             var notificarEdicion = DebeNotificarWsEnEdicion(resultado);
@@ -1747,10 +1745,6 @@ public class NotaController : ControllerBase
         var icbper = nota.ICBPER ?? 0m;
         var totalDetalle = detalleList.Sum(x => x.DetalleImporte ?? 0m);
         var total = nota.NotaTotal ?? (totalDetalle + icbper);
-        var calculoTributario = CalcularTributacionDocumento(xDocumento, total, icbper);
-        var subtotal = calculoTributario.SubTotal;
-        var igv = calculoTributario.Igv;
-
         var movilidad = nota.NotaMovilidad ?? 0m;
         var descuento = nota.NotaDescuento ?? 0m;
         var acuenta = nota.NotaAcuenta ?? 0m;
@@ -1759,19 +1753,23 @@ public class NotaController : ControllerBase
         var tarjeta = nota.NotaTarjeta ?? 0m;
         var pagar = nota.NotaPagar ?? total;
         var ganancia = nota.NotaGanancia ?? 0m;
+        var subtotal = nota.NotaSubtotal ?? ResolverSubtotalSinIgv(null, total, movilidad, adicional);
+        var igv = nota.DocuIgv ?? (EsDocumentoConIgv18(xDocumento)
+            ? DecimalMax(0m, total - adicional - subtotal)
+            : 0m);
         var xserie = nota.NotaSerie ?? string.Empty;
         var numero = string.IsNullOrWhiteSpace(nota.NotaNumero)
             ? (nota.NroOperacion ?? string.Empty)
             : nota.NotaNumero;
         // Defaults for uspinsertarNotaB fields not present in NotaPedido payloads
-        var docuAdicional = 0m;
+        var docuAdicional = nota.DocuAdicional ?? adicional;
         var docuHash = string.Empty;
         var estadoSunat = "PENDIENTE";
-        var docuSubtotal = calculoTributario.SubTotal;
-        var docuIgv = calculoTributario.Igv;
+        var docuSubtotal = nota.DocuSubtotal ?? subtotal;
+        var docuIgv = igv;
         var usuarioId = "7";
-        var docuGravada = calculoTributario.Gravada;
-        var docuDescuento = 0m;
+        var docuGravada = nota.DocuGravada ?? ResolverDocuGravada(xDocumento, docuSubtotal, total, movilidad, adicional, descuento, icbper);
+        var docuDescuento = nota.DocuDescuento ?? ResolverDocuDescuento(xDocumento, descuento);
         var notaEstado = EsBoleta(xDocumento) ? "EMITIDO" : (nota.NotaEstado ?? "PENDIENTE");
 
         var headerFields = new List<string?>
@@ -1975,11 +1973,12 @@ public class NotaController : ControllerBase
                 total = subtotalInformativo + icbper;
             }
         }
-        var calculoTributario = CalcularTributacionDocumento(docu, total, icbper);
-        var subtotal = calculoTributario.SubTotal;
         var acuenta = GetFirstDecimal(res, 0m, "Acuenta", "NotaAcuenta");
         var saldo = GetFirstDecimal(res, 0m, "Saldo", "NotaSaldo");
         var adicional = GetFirstDecimal(res, 0m, "Adicional", "NotaAdicional", "DocuAdicional");
+        var subtotal = subtotalInformativo > 0m
+            ? subtotalInformativo
+            : ResolverSubtotalSinIgv(null, total, movilidad, adicional);
         var tarjeta = GetFirstDecimal(res, 0m, "Tarjeta", "NotaTarjeta");
         var pagar = GetFirstDecimal(res, total, "Pagar", "NotaPagar", "PagoTotal");
         var estado = GetFirstString(res, "Estado", "NotaEstado", "EstadoSunat");
@@ -1992,16 +1991,16 @@ public class NotaController : ControllerBase
         var numero = GetFirstString(res, "NotaNumero", "Numero", "NroOperacion");
         var ganancia = GetFirstDecimal(res, 0m, "Ganancia", "NotaGanancia");
         var letra = Letras.enletras(total.ToString("N2")) + "  SOLES";
-        var docuAdicional = GetFirstDecimal(res, 0m, "DocuAdicional", "AdicionalDoc");
+        var docuAdicional = GetFirstDecimal(res, adicional, "DocuAdicional", "AdicionalDoc", "NotaAdicional");
         var docuHash = GetFirstString(res, "DocuHash", "Hash");
         var estadoSunat = GetFirstString(res, "EstadoSunat");
         if (string.IsNullOrWhiteSpace(estadoSunat)) estadoSunat = "PENDIENTE";
-        var docuSubtotal = calculoTributario.SubTotal;
-        var igv = calculoTributario.Igv;
+        var docuSubtotal = GetFirstDecimal(res, subtotal, "DocuSubtotal", "DocuSubTotal", "NotaSubtotal", "SubTotal");
+        var igv = GetFirstDecimal(res, EsDocumentoConIgv18(docu) ? DecimalMax(0m, total - adicional - docuSubtotal) : 0m, "DocuIgv", "DocuIGV", "Igv", "IGV");
         var usuarioId = GetFirstString(res, "UsuarioId", "usuarioId", "USUARIO_ID");
         if (string.IsNullOrWhiteSpace(usuarioId)) usuarioId = "7";
-        var docuGravada = calculoTributario.Gravada;
-        var docuDescuento = GetFirstDecimal(res, 0m, "DocuDescuento");
+        var docuGravada = GetFirstDecimal(res, ResolverDocuGravada(docu, docuSubtotal, total, movilidad, adicional, descuento, icbper), "DocuGravada", "Gravada");
+        var docuDescuento = GetFirstDecimal(res, ResolverDocuDescuento(docu, descuento), "DocuDescuento");
 
         var headerFields = new List<string?>
         {
@@ -2167,8 +2166,15 @@ public class NotaController : ControllerBase
         var total = nota.NotaTotal ?? (totalDetalle + icbper);
         var subtotal = nota.NotaSubtotal ?? DecimalMax(0m, total - icbper);
         var descuento = nota.NotaDescuento ?? 0m;
-        var docuGravada = DecimalMax(0m, subtotal);
-        var docuDescuento = descuento;
+        var docuGravada = nota.DocuGravada ?? ResolverDocuGravada(
+            nota.NotaDocu,
+            subtotal,
+            total,
+            nota.NotaMovilidad ?? 0m,
+            nota.NotaAdicional ?? 0m,
+            descuento,
+            icbper);
+        var docuDescuento = nota.DocuDescuento ?? ResolverDocuDescuento(nota.NotaDocu, descuento);
 
         var headerFields = new List<string?>
         {
@@ -2271,10 +2277,10 @@ public class NotaController : ControllerBase
         var numero = GetFirstString(res, "NotaNumero", "Numero", "NroOperacion");
         var ganancia = GetFirstDecimal(res, 0m, "Ganancia", "NotaGanancia");
         var letra = Letras.enletras(total.ToString("N2", CultureInfo.InvariantCulture)) + "  SOLES";
-        var docuAdicional = GetFirstDecimal(res, 0m, "DocuAdicional", "AdicionalDoc");
+        var docuAdicional = GetFirstDecimal(res, adicional, "DocuAdicional", "AdicionalDoc", "NotaAdicional");
         var concepto = GetFirstString(res, "Concepto", "NotaConcepto");
-        var docuGravada = GetFirstDecimal(res, DecimalMax(0m, subtotal), "DocuGravada", "Gravada");
-        var docuDescuento = GetFirstDecimal(res, descuento, "DocuDescuento");
+        var docuGravada = GetFirstDecimal(res, ResolverDocuGravada(docu, subtotal, total, movilidad, adicional, descuento, icbper), "DocuGravada", "Gravada");
+        var docuDescuento = GetFirstDecimal(res, ResolverDocuDescuento(docu, descuento), "DocuDescuento");
 
         var headerFields = new List<string?>
         {
@@ -2683,6 +2689,108 @@ public class NotaController : ControllerBase
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "No se pudo forzar Estado/CantidadSaldo en DetallePedido para NotaId={NotaId} post-edición.", notaId);
+        }
+    }
+
+    private async Task SincronizarDetallesProformaPostEdicionAsync(NotaPedido nota, IReadOnlyList<DetalleNota> detalles, CancellationToken cancellationToken)
+    {
+        if (nota.NotaId <= 0
+            || detalles.Count == 0
+            || !(nota.NotaDocu ?? string.Empty).Contains("PROFORMA", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        var connectionString = _configuration.GetConnectionString("DefaultConnection");
+        if (string.IsNullOrWhiteSpace(connectionString))
+        {
+            return;
+        }
+
+        const string deleteSql = "DELETE FROM DetallePedido WHERE NotaId = @NotaId;";
+        const string insertSql = """
+            INSERT INTO DetallePedido
+            (
+                NotaId,
+                IdProducto,
+                DetalleCantidad,
+                DetalleUm,
+                DetalleDescripcion,
+                DetalleCosto,
+                DetallePrecio,
+                DetalleImporte,
+                DetalleEstado,
+                CantidadSaldo,
+                ValorUM,
+                Estado
+            )
+            VALUES
+            (
+                @NotaId,
+                @IdProducto,
+                @DetalleCantidad,
+                @DetalleUm,
+                @DetalleDescripcion,
+                @DetalleCosto,
+                @DetallePrecio,
+                @DetalleImporte,
+                @DetalleEstado,
+                @CantidadSaldo,
+                @ValorUM,
+                @Estado
+            );
+            """;
+
+        try
+        {
+            await using var con = new SqlConnection(connectionString);
+            await con.OpenAsync(cancellationToken);
+            await using var tx = (SqlTransaction)await con.BeginTransactionAsync(cancellationToken);
+
+            try
+            {
+                await using (var deleteCmd = new SqlCommand(deleteSql, con, tx))
+                {
+                    deleteCmd.Parameters.AddWithValue("@NotaId", nota.NotaId);
+                    await deleteCmd.ExecuteNonQueryAsync(cancellationToken);
+                }
+
+                foreach (var detalle in detalles)
+                {
+                    var cantidad = detalle.DetalleCantidad ?? 0m;
+                    var cantidadSaldo = detalle.CantidadSaldo ?? (
+                        string.Equals((nota.NotaEntrega ?? string.Empty).Trim(), "INMEDIATA", StringComparison.OrdinalIgnoreCase)
+                            ? 0m
+                            : cantidad);
+
+                    await using var insertCmd = new SqlCommand(insertSql, con, tx);
+                    insertCmd.Parameters.AddWithValue("@NotaId", nota.NotaId);
+                    insertCmd.Parameters.AddWithValue("@IdProducto", (object?)detalle.IdProducto ?? DBNull.Value);
+                    insertCmd.Parameters.AddWithValue("@DetalleCantidad", cantidad);
+                    insertCmd.Parameters.AddWithValue("@DetalleUm", (object?)detalle.DetalleUm ?? DBNull.Value);
+                    insertCmd.Parameters.AddWithValue("@DetalleDescripcion", (object?)detalle.DetalleDescripcion ?? DBNull.Value);
+                    insertCmd.Parameters.AddWithValue("@DetalleCosto", detalle.DetalleCosto ?? 0m);
+                    insertCmd.Parameters.AddWithValue("@DetallePrecio", detalle.DetallePrecio ?? 0m);
+                    insertCmd.Parameters.AddWithValue("@DetalleImporte", detalle.DetalleImporte ?? 0m);
+                    insertCmd.Parameters.AddWithValue("@DetalleEstado", detalle.DetalleEstado ?? "PENDIENTE");
+                    insertCmd.Parameters.AddWithValue("@CantidadSaldo", cantidadSaldo);
+                    insertCmd.Parameters.AddWithValue("@ValorUM", detalle.ValorUM ?? 1m);
+                    insertCmd.Parameters.AddWithValue("@Estado", "E");
+                    await insertCmd.ExecuteNonQueryAsync(cancellationToken);
+                }
+
+                await tx.CommitAsync(cancellationToken);
+            }
+            catch
+            {
+                await tx.RollbackAsync(cancellationToken);
+                throw;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "No se pudo sincronizar DetallePedido para la proforma editada NotaId={NotaId}.", nota.NotaId);
+            throw;
         }
     }
 
@@ -6156,16 +6264,61 @@ public class NotaController : ControllerBase
         };
     }
 
+    private static decimal ResolverSubtotalSinIgv(decimal? subtotal, decimal total, decimal movilidad, decimal adicional)
+    {
+        return subtotal is > 0m
+            ? subtotal.Value
+            : DecimalMax(0m, total - movilidad - adicional);
+    }
+
+    private static decimal ResolverDocuGravada(
+        string? documento,
+        decimal docuSubtotal,
+        decimal total,
+        decimal movilidad,
+        decimal adicional,
+        decimal descuento,
+        decimal icbper)
+    {
+        if (!EsDocumentoConIgv18(documento))
+        {
+            return DecimalMax(0m, docuSubtotal);
+        }
+
+        var totalMercaderia = DecimalMax(0m, total - movilidad - adicional + descuento);
+        return CalcularTributacionDocumento(totalMercaderia, icbper, true, PorcentajeIgvDefault).Gravada;
+    }
+
+    private static decimal ResolverDocuDescuento(string? documento, decimal descuento)
+    {
+        if (!EsDocumentoConIgv18(documento))
+        {
+            return DecimalMax(0m, descuento);
+        }
+
+        return CalcularTributacionDocumento(descuento, 0m, true, PorcentajeIgvDefault).Gravada;
+    }
+
     private static void AplicarReglaTributariaDocumento(NotaPedido nota, IReadOnlyList<DetalleNota> detalles)
     {
         var totalIcbper = nota.ICBPER ?? 0m;
         var totalDetalle = detalles.Sum(x => x.DetalleImporte ?? 0m);
-        var totalDocumento = nota.NotaTotal ?? (totalDetalle + totalIcbper);
-        var calculo = CalcularTributacionDocumento(nota.NotaDocu, totalDocumento, totalIcbper);
+        var adicional = nota.NotaAdicional ?? 0m;
+        var totalDocumento = nota.NotaTotal ?? (totalDetalle + totalIcbper + adicional);
+        var totalTributario = EsDocumentoConIgv18(nota.NotaDocu)
+            ? DecimalMax(0m, totalDocumento - adicional)
+            : totalDocumento;
+        var calculo = CalcularTributacionDocumento(nota.NotaDocu, totalTributario, totalIcbper);
 
-        nota.NotaTotal = calculo.Total;
-        nota.NotaSubtotal = calculo.SubTotal;
-        nota.NotaPagar ??= calculo.Total;
+        nota.NotaTotal = totalDocumento;
+        nota.NotaSubtotal = EsDocumentoConIgv18(nota.NotaDocu)
+            ? calculo.SubTotal
+            : ResolverSubtotalSinIgv(
+                nota.NotaSubtotal,
+                totalDocumento,
+                nota.NotaMovilidad ?? 0m,
+                nota.NotaAdicional ?? 0m);
+        nota.NotaPagar ??= totalDocumento;
     }
 
     private static decimal SumarImporteDetalleJson(JArray? detalleArray, JObject? detalleObjeto)
@@ -6469,27 +6622,79 @@ public class NotaController : ControllerBase
 
             var totalIcbper = nota.ICBPER ?? 0m;
             var totalDetalle = detalles.Sum(x => x.DetalleImporte ?? 0m);
-            var totalDocumento = nota.NotaTotal ?? (totalDetalle + totalIcbper);
-            var calculo = CalcularTributacionDocumento(nota.NotaDocu, totalDocumento, totalIcbper);
+            var movilidad = nota.NotaMovilidad ?? 0m;
+            var descuento = nota.NotaDescuento ?? 0m;
+            var adicional = nota.NotaAdicional ?? 0m;
+            var esProforma = (nota.NotaDocu ?? string.Empty).Contains("PROFORMA", StringComparison.OrdinalIgnoreCase);
+            var esTarjeta = (nota.NotaFormaPago ?? string.Empty).Equals("TARJETA", StringComparison.OrdinalIgnoreCase);
+            var totalDocumento = nota.NotaTotal ?? (totalDetalle + totalIcbper + adicional);
+            var totalTributario = EsDocumentoConIgv18(nota.NotaDocu)
+                ? DecimalMax(0m, totalDocumento - adicional)
+                : totalDocumento;
+            var calculo = CalcularTributacionDocumento(nota.NotaDocu, totalTributario, totalIcbper);
+            var subtotalNota = nota.NotaSubtotal ?? docuSubtotalDefault();
+            var docuSubtotal = nota.DocuSubtotal ?? subtotalNota;
+            var docuIgv = nota.DocuIgv ?? calculo.Igv;
+            var docuGravada = nota.DocuGravada ?? ResolverDocuGravada(
+                nota.NotaDocu,
+                docuSubtotal,
+                totalDocumento,
+                movilidad,
+                adicional,
+                descuento,
+                totalIcbper);
+            var docuDescuento = nota.DocuDescuento ?? ResolverDocuDescuento(nota.NotaDocu, descuento);
 
             await using var con = new SqlConnection(connectionString);
             await con.OpenAsync(cancellationToken);
 
+            if (esProforma && esTarjeta && adicional <= 0m && nota.CompaniaId is > 0)
+            {
+                await using var cmdPorcentaje = new SqlCommand(
+                    "SELECT TOP 1 ISNULL(TarjetaPorcentaje, 0) FROM Compania WHERE CompaniaId = @CompaniaId",
+                    con);
+                cmdPorcentaje.Parameters.AddWithValue("@CompaniaId", nota.CompaniaId.Value);
+                var porcentajeObj = await cmdPorcentaje.ExecuteScalarAsync(cancellationToken);
+                var porcentaje = porcentajeObj == DBNull.Value || porcentajeObj is null
+                    ? 0m
+                    : Convert.ToDecimal(porcentajeObj);
+                var baseTarjeta = DecimalMax(0m, totalDetalle + movilidad - descuento + totalIcbper);
+                adicional = Math.Round(baseTarjeta * porcentaje / 100m, 2, MidpointRounding.AwayFromZero);
+            }
+
+            if (esProforma)
+            {
+                subtotalNota = Math.Round(totalDetalle, 2, MidpointRounding.AwayFromZero);
+                totalDocumento = Math.Round(
+                    DecimalMax(0m, subtotalNota + movilidad - descuento + totalIcbper) + adicional,
+                    2,
+                    MidpointRounding.AwayFromZero);
+                docuSubtotal = subtotalNota;
+                docuIgv = 0m;
+                docuGravada = totalDocumento;
+                docuDescuento = descuento;
+            }
+
             const string sqlNota = """
                 UPDATE NotaPedido
                 SET NotaSubtotal = @NotaSubtotal,
+                    NotaAdicional = @NotaAdicional,
                     NotaTotal = @NotaTotal,
                     ICBPER = @ICBPER,
-                    NotaPagar = CASE WHEN ISNULL(NotaPagar, 0) = 0 THEN @NotaTotal ELSE NotaPagar END
+                    NotaPagar = @NotaTotal,
+                    NotaSaldo = @NotaTotal,
+                    NotaTarjeta = CASE WHEN @EsTarjeta = 1 THEN @NotaTotal ELSE 0 END
                 WHERE NotaId = @NotaId;
                 """;
 
             await using (var cmdNota = new SqlCommand(sqlNota, con))
             {
                 cmdNota.Parameters.AddWithValue("@NotaId", nota.NotaId);
-                cmdNota.Parameters.AddWithValue("@NotaSubtotal", calculo.SubTotal);
-                cmdNota.Parameters.AddWithValue("@NotaTotal", calculo.Total);
+                cmdNota.Parameters.AddWithValue("@NotaSubtotal", subtotalNota);
+                cmdNota.Parameters.AddWithValue("@NotaAdicional", adicional);
+                cmdNota.Parameters.AddWithValue("@NotaTotal", totalDocumento);
                 cmdNota.Parameters.AddWithValue("@ICBPER", totalIcbper);
+                cmdNota.Parameters.AddWithValue("@EsTarjeta", esTarjeta ? 1 : 0);
                 await cmdNota.ExecuteNonQueryAsync(cancellationToken);
             }
 
@@ -6497,6 +6702,7 @@ public class NotaController : ControllerBase
                 UPDATE DocumentoVenta
                 SET DocuSubTotal = @DocuSubTotal,
                     DocuIgv = @DocuIgv,
+                    DocuAdicional = @DocuAdicional,
                     DocuGravada = @DocuGravada,
                     DocuDescuento = @DocuDescuento,
                     ICBPER = @ICBPER,
@@ -6507,13 +6713,16 @@ public class NotaController : ControllerBase
 
             await using var cmdDocu = new SqlCommand(sqlDocumentoVenta, con);
             cmdDocu.Parameters.AddWithValue("@NotaId", nota.NotaId);
-            cmdDocu.Parameters.AddWithValue("@DocuSubTotal", calculo.SubTotal);
-            cmdDocu.Parameters.AddWithValue("@DocuIgv", calculo.Igv);
-            cmdDocu.Parameters.AddWithValue("@DocuGravada", calculo.Gravada);
-            cmdDocu.Parameters.AddWithValue("@DocuDescuento", nota.NotaDescuento ?? 0m);
+            cmdDocu.Parameters.AddWithValue("@DocuSubTotal", docuSubtotal);
+            cmdDocu.Parameters.AddWithValue("@DocuIgv", docuIgv);
+            cmdDocu.Parameters.AddWithValue("@DocuAdicional", nota.DocuAdicional ?? adicional);
+            cmdDocu.Parameters.AddWithValue("@DocuGravada", docuGravada);
+            cmdDocu.Parameters.AddWithValue("@DocuDescuento", docuDescuento);
             cmdDocu.Parameters.AddWithValue("@ICBPER", totalIcbper);
-            cmdDocu.Parameters.AddWithValue("@DocuTotal", calculo.Total);
+            cmdDocu.Parameters.AddWithValue("@DocuTotal", totalDocumento);
             await cmdDocu.ExecuteNonQueryAsync(cancellationToken);
+
+            decimal docuSubtotalDefault() => nota.NotaSubtotal ?? calculo.SubTotal;
         }
         catch (Exception ex)
         {

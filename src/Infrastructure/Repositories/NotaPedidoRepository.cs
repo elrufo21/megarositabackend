@@ -600,6 +600,36 @@ public class NotaPedidoRepository : INotaPedido
                                     NotaGanancia,
                                     ICBPER,
                                     CajaId,
+                                    (
+                                        SELECT TOP (1) d.DocuSubTotal
+                                        FROM DocumentoVenta d
+                                        WHERE d.NotaId = NotaPedido.NotaId
+                                        ORDER BY d.DocuId DESC
+                                    ) AS DocuSubtotal,
+                                    (
+                                        SELECT TOP (1) d.DocuIgv
+                                        FROM DocumentoVenta d
+                                        WHERE d.NotaId = NotaPedido.NotaId
+                                        ORDER BY d.DocuId DESC
+                                    ) AS DocuIgv,
+                                    (
+                                        SELECT TOP (1) d.DocuAdicional
+                                        FROM DocumentoVenta d
+                                        WHERE d.NotaId = NotaPedido.NotaId
+                                        ORDER BY d.DocuId DESC
+                                    ) AS DocuAdicional,
+                                    (
+                                        SELECT TOP (1) d.DocuGravada
+                                        FROM DocumentoVenta d
+                                        WHERE d.NotaId = NotaPedido.NotaId
+                                        ORDER BY d.DocuId DESC
+                                    ) AS DocuGravada,
+                                    (
+                                        SELECT TOP (1) d.DocuDescuento
+                                        FROM DocumentoVenta d
+                                        WHERE d.NotaId = NotaPedido.NotaId
+                                        ORDER BY d.DocuId DESC
+                                    ) AS DocuDescuento,
                                     c.ClienteRazon,
                                     c.ClienteRuc,
                                     c.ClienteDni,
@@ -1054,6 +1084,11 @@ public class NotaPedidoRepository : INotaPedido
             NotaGanancia = reader["NotaGanancia"] == DBNull.Value ? null : Convert.ToDecimal(reader["NotaGanancia"]),
             ICBPER = reader["ICBPER"] == DBNull.Value ? null : Convert.ToDecimal(reader["ICBPER"]),
             CajaId = ToNullableInt(reader["CajaId"]),
+            DocuSubtotal = reader["DocuSubtotal"] == DBNull.Value ? null : Convert.ToDecimal(reader["DocuSubtotal"]),
+            DocuIgv = reader["DocuIgv"] == DBNull.Value ? null : Convert.ToDecimal(reader["DocuIgv"]),
+            DocuAdicional = reader["DocuAdicional"] == DBNull.Value ? null : Convert.ToDecimal(reader["DocuAdicional"]),
+            DocuGravada = reader["DocuGravada"] == DBNull.Value ? null : Convert.ToDecimal(reader["DocuGravada"]),
+            DocuDescuento = reader["DocuDescuento"] == DBNull.Value ? null : Convert.ToDecimal(reader["DocuDescuento"]),
             EstadoSunat = reader["EstadoSunat"] == DBNull.Value ? null : reader["EstadoSunat"].ToString(),
             ClienteRazon = GetNullableString(reader, "ClienteRazon"),
             ClienteRuc = GetNullableString(reader, "ClienteRuc"),

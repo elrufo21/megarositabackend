@@ -22,6 +22,14 @@ WHERE UPPER(LTRIM(RTRIM(ISNULL(n.NotaDocu, '')))) = 'BOLETA'
   AND UPPER(LTRIM(RTRIM(ISNULL(n.NotaEstado, '')))) = 'PENDIENTE';
 GO
 
+UPDATE n
+SET n.NotaSubtotal = n.NotaTotal - ISNULL(n.NotaMovilidad, 0) - ISNULL(n.NotaAdicional, 0)
+FROM dbo.NotaPedido n
+WHERE UPPER(LTRIM(RTRIM(ISNULL(n.NotaDocu, '')))) IN ('PROFORMA', 'PROFORMA V')
+  AND ISNULL(n.NotaMovilidad, 0) + ISNULL(n.NotaAdicional, 0) > 0
+  AND ABS(ISNULL(n.NotaSubtotal, 0) - ISNULL(n.NotaTotal, 0)) < 0.01;
+GO
+
 
 -- Ejecutar en la base de datos destino antes de este ALTER PROCEDURE.
 SET ANSI_NULLS ON
@@ -135,6 +143,45 @@ set @UsuarioId=convert(int,SUBSTRING(@orden,@c29+1,@c30-@c29-1))
 set @ICBPER=convert(decimal(18,2),SUBSTRING(@orden,@c30+1,@c31-@c30-1))      
 set @DocuGravada=convert(decimal(18,2),SUBSTRING(@orden,@c31+1,@c32-@c31-1))      
 set @DocuDescuento=convert(decimal(18,2),SUBSTRING(@orden,@c32+1,@c33-@c32-1))      
+if upper(ltrim(rtrim(isnull(@NotaDocu,'')))) in ('PROFORMA','PROFORMA V')
+   and isnull(@NotaMovilidad,0) + isnull(@NotaAdicional,0) > 0
+   and abs(isnull(@NotaSubtotal,0) - isnull(@NotaTotal,0)) < 0.01
+begin
+  set @NotaSubtotal = @NotaTotal - isnull(@NotaMovilidad,0) - isnull(@NotaAdicional,0)
+  set @DocuSubtotal = @NotaSubtotal
+  set @DocuGravada = @NotaSubtotal
+end
+if upper(ltrim(rtrim(isnull(@NotaDocu,'')))) in ('BOLETA','FACTURA')
+begin
+  declare @TarjetaPorcentaje decimal(18,2)
+  set @TarjetaPorcentaje = isnull((select top 1 TarjetaPorcentaje from Compania where CompaniaId = @CompaniaId),0)
+  if upper(ltrim(rtrim(isnull(@NotaFormaPago,'')))) = 'TARJETA'
+     and isnull(@NotaAdicional,0) = 0
+     and @TarjetaPorcentaje > 0
+  begin
+    set @NotaAdicional = round(@NotaTotal * @TarjetaPorcentaje / 100, 2)
+    set @NotaTotal = @NotaTotal + @NotaAdicional
+    set @NotaPagar = case when isnull(@NotaPagar,0) > 0 then @NotaPagar + @NotaAdicional else @NotaTotal end
+    set @NotaSaldo = case when isnull(@NotaSaldo,0) > 0 then @NotaSaldo + @NotaAdicional else @NotaSaldo end
+    set @NotaTarjeta = case when isnull(@NotaTarjeta,0) > 0 then @NotaTarjeta + @NotaAdicional else @NotaTarjeta end
+  end
+  if upper(ltrim(rtrim(isnull(@NotaFormaPago,'')))) = 'TARJETA'
+  begin
+    set @DocuAdicional = isnull(@NotaAdicional,0)
+    set @DocuSubtotal = isnull(@NotaPagar,@NotaTotal) / 1.18
+    set @DocuIGV = isnull(@NotaPagar,@NotaTotal) - @DocuSubtotal
+    set @DocuGravada = isnull(@NotaSubtotal,0) / 1.18
+    set @DocuDescuento = isnull(@NotaDescuento,0) / 1.18
+  end
+  else
+  begin
+    if isnull(@DocuAdicional,0) = 0 set @DocuAdicional = isnull(@NotaAdicional,0)
+    if isnull(@DocuGravada,0) = 0 set @DocuGravada = (@NotaTotal - isnull(@NotaMovilidad,0) - isnull(@NotaAdicional,0) + isnull(@NotaDescuento,0) - isnull(@ICBPER,0)) / 1.18
+    if isnull(@DocuSubtotal,0) = 0 set @DocuSubtotal = (@NotaTotal - isnull(@NotaAdicional,0) - isnull(@ICBPER,0)) / 1.18
+    if isnull(@DocuIGV,0) = 0 set @DocuIGV = (@NotaTotal - isnull(@NotaAdicional,0)) - @DocuSubtotal
+    if isnull(@DocuDescuento,0) = 0 and isnull(@NotaDescuento,0) > 0 set @DocuDescuento = isnull(@NotaDescuento,0) / 1.18
+  end
+end
 declare @NotaId numeric(38),      
         @DocuId numeric(38)=0      
 Begin Transaction  
@@ -227,6 +274,32 @@ Fetch Next From Tabla INTO @Columna
 end      
  Close Tabla;      
  Deallocate Tabla;      
+declare @DetalleTotalInsertado decimal(18,2)
+select @DetalleTotalInsertado = sum(isnull(DetalleImporte,0))
+from DetallePedido
+where NotaId = @NotaId
+
+if isnull(@DetalleTotalInsertado,0) > 0
+begin
+  update NotaPedido
+  set NotaSubtotal = @DetalleTotalInsertado
+  where NotaId = @NotaId
+
+  if upper(ltrim(rtrim(isnull(@NotaDocu,'')))) in ('BOLETA','FACTURA')
+     and upper(ltrim(rtrim(isnull(@NotaFormaPago,'')))) = 'TARJETA'
+     and @DocuId <> 0
+  begin
+    update DocumentoVenta
+    set DocuSubTotal = @NotaPagar / 1.18,
+        DocuIgv = @NotaPagar - (@NotaPagar / 1.18),
+        DocuAdicional = isnull(@NotaAdicional,0),
+        DocuGravada = @DetalleTotalInsertado / 1.18,
+        DocuDescuento = isnull(@NotaDescuento,0) / 1.18,
+        DocuTotal = @NotaPagar
+    where DocuId = @DocuId
+  end
+end
+
 if(len(@Guia)>0)      
 begin      
 Declare TablaB Cursor For Select * From fnSplitString(@Guia,';')       
@@ -258,3 +331,31 @@ end
 end
 GO
 
+;WITH detalle AS (
+  SELECT
+    NotaId,
+    CAST(ROUND(SUM(ISNULL(DetalleImporte, 0)), 2) AS decimal(18,2)) AS DetalleTotal
+  FROM dbo.DetallePedido
+  GROUP BY NotaId
+)
+UPDATE n
+SET n.NotaSubtotal = d.DetalleTotal
+FROM dbo.NotaPedido n
+JOIN detalle d ON d.NotaId = n.NotaId
+WHERE n.NotaFecha >= '20260717'
+  AND ABS(ISNULL(n.NotaSubtotal, 0) - d.DetalleTotal) > 0.01;
+GO
+
+UPDATE d
+SET d.DocuAdicional = ISNULL(n.NotaAdicional, 0),
+    d.DocuSubTotal = ISNULL(n.NotaPagar, n.NotaTotal) / 1.18,
+    d.DocuIgv = ISNULL(n.NotaPagar, n.NotaTotal) - (ISNULL(n.NotaPagar, n.NotaTotal) / 1.18),
+    d.DocuTotal = ISNULL(n.NotaPagar, n.NotaTotal),
+    d.DocuGravada = ISNULL(n.NotaSubtotal, 0) / 1.18,
+    d.DocuDescuento = ISNULL(n.NotaDescuento, 0) / 1.18
+FROM dbo.DocumentoVenta d
+JOIN dbo.NotaPedido n ON n.NotaId = d.NotaId
+WHERE d.TipoCodigo IN ('01', '03')
+  AND n.NotaFecha >= '20260717'
+  AND UPPER(LTRIM(RTRIM(ISNULL(n.NotaFormaPago, '')))) = 'TARJETA';
+GO

@@ -31,6 +31,11 @@ public class NotaPedido
     public string? NotaNumero { get; set; }
     public decimal? NotaGanancia { get; set; }
     public decimal? ICBPER { get; set; }
+    public decimal? DocuSubtotal { get; set; }
+    public decimal? DocuIgv { get; set; }
+    public decimal? DocuAdicional { get; set; }
+    public decimal? DocuGravada { get; set; }
+    public decimal? DocuDescuento { get; set; }
     public int? CajaId { get; set; }
     public int? FlagMovil { get; set; }
     public string? EntidadBancaria { get; set; }
