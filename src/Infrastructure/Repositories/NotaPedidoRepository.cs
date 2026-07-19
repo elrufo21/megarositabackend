@@ -26,7 +26,7 @@ public class NotaPedidoRepository : INotaPedido
         var result = await _accesoDatos.EjecutarComandoConFallbackAsync(
             new (string StoredProcedure, string ParameterName)[]
             {
-                ("web.uspinsertarNotaB_web", "@ListaOrden"),
+                ("web.uspinsertarNotaB_web", "@ListaOrden"), 
                 ("dbo.uspinsertarNotaB_web", "@ListaOrden"),
                 ("web.uspinsertarNotaB", "@ListaOrden"),
                 ("dbo.uspinsertarNotaB", "@ListaOrden"),

@@ -2821,8 +2821,13 @@ public class NotaController : ControllerBase
 
     private static string FormatDateForSql(DateTime? value)
     {
-        // SQL Server parses yyyymmdd consistently regardless of DATEFORMAT/LANGUAGE.
-        return (value ?? DateTime.Now).ToString("yyyyMMdd", CultureInfo.InvariantCulture);
+        return FormatDateTimeForSql(value ?? DateTime.Now);
+    }
+
+    private static string FormatDateTimeForSql(DateTime value)
+    {
+        var format = value.TimeOfDay == TimeSpan.Zero ? "yyyyMMdd" : "yyyyMMdd HH:mm:ss";
+        return value.ToString(format, CultureInfo.InvariantCulture);
     }
 
     private static string NormalizeDateValue(string rawDate)
@@ -2849,16 +2854,16 @@ public class NotaController : ControllerBase
                     DateTimeStyles.AllowWhiteSpaces | DateTimeStyles.AssumeLocal,
                     out var parsedExact))
             {
-                return parsedExact.ToString("yyyyMMdd", CultureInfo.InvariantCulture);
+                return FormatDateTimeForSql(parsedExact);
             }
 
             if (DateTime.TryParse(rawDate, out var parsed))
             {
-                return parsed.ToString("yyyyMMdd", CultureInfo.InvariantCulture);
+                return FormatDateTimeForSql(parsed);
             }
         }
 
-        return DateTime.Now.ToString("yyyyMMdd", CultureInfo.InvariantCulture);
+        return FormatDateTimeForSql(DateTime.Now);
     }
 
     private static string GetFirstString(dynamic obj, params string[] names)
