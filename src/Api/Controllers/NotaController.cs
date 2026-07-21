@@ -1674,6 +1674,10 @@ public class NotaController : ControllerBase
                 request.Nota.NotaId,
                 ResolverEstadoPostEdicion(request.Nota.NotaDocu, request.Nota.NotaEstado),
                 cancellationToken);
+            await ForzarCompaniaIdPostEdicionAsync(
+                request.Nota.NotaId,
+                request.Nota.CompaniaId,
+                cancellationToken);
             await MarcarFlagMovilSiCorrespondeAsync(
                 request.Nota.NotaId,
                 request.Nota.FlagMovil,
@@ -1716,6 +1720,7 @@ public class NotaController : ControllerBase
             null,
             cancellationToken);
         await ForzarEstadoNotaPostEdicionAsync(notaIdEstado, ResolverEstadoPostEdicion(docuBody, estadoBody), cancellationToken);
+        await ForzarCompaniaIdPostEdicionAsync(notaIdEstado, companiaIdResuelta, cancellationToken);
         await MarcarFlagMovilSiCorrespondeAsync(
             notaIdEstado,
             TryGetIntFromJson(body, "FlagMovil", "flagMovil"),
@@ -2605,6 +2610,40 @@ public class NotaController : ControllerBase
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "No se pudo forzar NotaEstado={Estado} para NotaId={NotaId} post-edición.", estado, notaId);
+        }
+    }
+
+    private async Task ForzarCompaniaIdPostEdicionAsync(long notaId, int? companiaId, CancellationToken cancellationToken)
+    {
+        if (notaId <= 0 || companiaId is null || companiaId <= 0)
+        {
+            return;
+        }
+
+        var connectionString = _configuration.GetConnectionString("DefaultConnection");
+        if (string.IsNullOrWhiteSpace(connectionString))
+        {
+            return;
+        }
+
+        const string sql = """
+            UPDATE NotaPedido
+            SET CompaniaId = @CompaniaId
+            WHERE NotaId = @NotaId;
+            """;
+
+        try
+        {
+            await using var con = new SqlConnection(connectionString);
+            await using var cmd = new SqlCommand(sql, con);
+            cmd.Parameters.AddWithValue("@CompaniaId", companiaId.Value);
+            cmd.Parameters.AddWithValue("@NotaId", notaId);
+            await con.OpenAsync(cancellationToken);
+            await cmd.ExecuteNonQueryAsync(cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "No se pudo forzar CompaniaId={CompaniaId} para NotaId={NotaId} post-edición.", companiaId, notaId);
         }
     }
 
