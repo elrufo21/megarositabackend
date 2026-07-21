@@ -13,6 +13,7 @@ using Microsoft.Extensions.Configuration;
 using System.Text.Json;
 using Newtonsoft.Json.Linq;
 using System.Collections.Generic;
+using System.Data;
 using System.Globalization;
 using System.Linq;
 using System.Net.WebSockets;
@@ -1671,13 +1672,14 @@ public class NotaController : ControllerBase
                 cancellationToken);
             await ForzarEstadoNotaPostEdicionAsync(
                 request.Nota.NotaId,
-                request.Nota.NotaEstado,
+                ResolverEstadoPostEdicion(request.Nota.NotaDocu, request.Nota.NotaEstado),
                 cancellationToken);
             await MarcarFlagMovilSiCorrespondeAsync(
                 request.Nota.NotaId,
                 request.Nota.FlagMovil,
                 cancellationToken);
             await SincronizarDetallesProformaPostEdicionAsync(request.Nota, detalles, cancellationToken);
+            await ActualizarTributacionPostEdicionAsync(request.Nota, detalles, cancellationToken);
             await ForzarEstadoDetallePostEdicionAsync(request.Nota.NotaId, cancellationToken);
 
             var notificarEdicion = DebeNotificarWsEnEdicion(resultado);
@@ -1689,7 +1691,6 @@ public class NotaController : ControllerBase
 
             if (notificarEdicion)
             {
-                await ActualizarTributacionPostEdicionAsync(request.Nota, detalles, cancellationToken);
                 await NotificarEdicionWsLegacyAsync(
                     request.Nota.NotaId,
                     ResolverTotalEdicion(request.Nota, detalles),
@@ -1708,16 +1709,18 @@ public class NotaController : ControllerBase
 
         var notaIdEstado = TryGetIntFromJson(body, "NotaId", "NotaIDBR", "NotaIdbr", "IDBR") ?? 0;
         var estadoBody = ExtractNotaEstado(body);
+        var docuBody = TryGetStringFromJson(body, "NotaDocu", "Documento", "Docu");
         await ActualizarAuditoriaPostEdicionAsync(
             notaIdEstado,
             TryGetStringFromJson(body, "ModificadoPor", "modificadoPor", "Usuario", "NotaUsuario"),
             null,
             cancellationToken);
-        await ForzarEstadoNotaPostEdicionAsync(notaIdEstado, estadoBody, cancellationToken);
+        await ForzarEstadoNotaPostEdicionAsync(notaIdEstado, ResolverEstadoPostEdicion(docuBody, estadoBody), cancellationToken);
         await MarcarFlagMovilSiCorrespondeAsync(
             notaIdEstado,
             TryGetIntFromJson(body, "FlagMovil", "flagMovil"),
             cancellationToken);
+        await ActualizarMontosPlanosPostEdicionAsync(body, notaIdEstado, cancellationToken);
         await ForzarEstadoDetallePostEdicionAsync(notaIdEstado, cancellationToken);
         var notificarEdicionRaw = DebeNotificarWsEnEdicion(resultadoRaw);
         _logger.LogInformation(
@@ -2612,6 +2615,98 @@ public class NotaController : ControllerBase
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "No se pudo marcar FlagMovil para NotaId={NotaId}.", notaId);
+        }
+    }
+
+    private async Task ActualizarMontosPlanosPostEdicionAsync(JsonElement body, long notaId, CancellationToken cancellationToken)
+    {
+        if (notaId <= 0)
+        {
+            return;
+        }
+
+        var total = TryGetDecimalFromJson(body, "Total", "NotaTotal");
+        var adicional = TryGetDecimalFromJson(body, "Adicional", "NotaAdicional", "DocuAdicional");
+        if (total is null && adicional is null)
+        {
+            return;
+        }
+
+        var formaPago = TryGetStringFromJson(body, "FormaPago", "NotaFormaPago") ?? string.Empty;
+        var esTarjeta = formaPago.Trim().Equals("TARJETA", StringComparison.OrdinalIgnoreCase);
+        var pagar = TryGetDecimalFromJson(body, "Pagar", "NotaPagar", "PagoTotal") ?? total;
+        var tarjeta = TryGetDecimalFromJson(body, "Tarjeta", "NotaTarjeta") ?? (esTarjeta ? pagar ?? total : 0m);
+        var saldo = TryGetDecimalFromJson(body, "Saldo", "NotaSaldo") ?? pagar ?? total;
+        var docuAdicional = TryGetDecimalFromJson(body, "DocuAdicional", "AdicionalDoc");
+        if ((docuAdicional is null || docuAdicional.Value == 0m) && adicional.GetValueOrDefault() > 0m)
+        {
+            docuAdicional = adicional;
+        }
+
+        var connectionString = _configuration.GetConnectionString("DefaultConnection");
+        if (string.IsNullOrWhiteSpace(connectionString))
+        {
+            return;
+        }
+
+        const string sql = """
+            UPDATE NotaPedido
+            SET NotaSubtotal = COALESCE(@NotaSubtotal, NotaSubtotal),
+                NotaMovilidad = COALESCE(@NotaMovilidad, NotaMovilidad),
+                NotaDescuento = COALESCE(@NotaDescuento, NotaDescuento),
+                NotaAdicional = COALESCE(@NotaAdicional, NotaAdicional),
+                NotaTotal = COALESCE(@NotaTotal, NotaTotal),
+                NotaPagar = COALESCE(@NotaPagar, COALESCE(@NotaTotal, NotaPagar)),
+                NotaSaldo = COALESCE(@NotaSaldo, COALESCE(@NotaPagar, COALESCE(@NotaTotal, NotaSaldo))),
+                NotaTarjeta = COALESCE(@NotaTarjeta, NotaTarjeta),
+                ICBPER = COALESCE(@ICBPER, ICBPER)
+            WHERE NotaId = @NotaId;
+
+            UPDATE DocumentoVenta
+            SET DocuSubTotal = COALESCE(@DocuSubtotal, DocuSubTotal),
+                DocuIgv = COALESCE(@DocuIgv, DocuIgv),
+                DocuAdicional = COALESCE(@DocuAdicional, DocuAdicional),
+                DocuGravada = COALESCE(@DocuGravada, DocuGravada),
+                DocuDescuento = COALESCE(@DocuDescuento, DocuDescuento),
+                DocuTotal = COALESCE(@NotaTotal, DocuTotal),
+                ICBPER = COALESCE(@ICBPER, ICBPER)
+            WHERE NotaId = @NotaId;
+            """;
+
+        try
+        {
+            await using var con = new SqlConnection(connectionString);
+            await using var cmd = new SqlCommand(sql, con);
+            cmd.Parameters.AddWithValue("@NotaId", notaId);
+            AddNullableDecimal(cmd, "@NotaSubtotal", TryGetDecimalFromJson(body, "SubTotal", "NotaSubtotal"));
+            AddNullableDecimal(cmd, "@NotaMovilidad", TryGetDecimalFromJson(body, "Movilidad", "NotaMovilidad"));
+            AddNullableDecimal(cmd, "@NotaDescuento", TryGetDecimalFromJson(body, "Descuento", "NotaDescuento"));
+            AddNullableDecimal(cmd, "@NotaAdicional", adicional);
+            AddNullableDecimal(cmd, "@NotaTotal", total);
+            AddNullableDecimal(cmd, "@NotaPagar", pagar);
+            AddNullableDecimal(cmd, "@NotaSaldo", saldo);
+            AddNullableDecimal(cmd, "@NotaTarjeta", tarjeta);
+            AddNullableDecimal(cmd, "@ICBPER", TryGetDecimalFromJson(body, "ICBPER"));
+            AddNullableDecimal(cmd, "@DocuSubtotal", TryGetDecimalFromJson(body, "DocuSubtotal", "DocuSubTotal"));
+            AddNullableDecimal(cmd, "@DocuIgv", TryGetDecimalFromJson(body, "DocuIgv", "DocuIGV", "Igv", "IGV"));
+            AddNullableDecimal(cmd, "@DocuAdicional", docuAdicional);
+            AddNullableDecimal(cmd, "@DocuGravada", TryGetDecimalFromJson(body, "DocuGravada", "Gravada"));
+            AddNullableDecimal(cmd, "@DocuDescuento", TryGetDecimalFromJson(body, "DocuDescuento"));
+
+            await con.OpenAsync(cancellationToken);
+            await cmd.ExecuteNonQueryAsync(cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "No se pudo actualizar montos post-edición para NotaId={NotaId}.", notaId);
+        }
+
+        static void AddNullableDecimal(SqlCommand cmd, string name, decimal? value)
+        {
+            var parameter = cmd.Parameters.Add(name, SqlDbType.Decimal);
+            parameter.Precision = 18;
+            parameter.Scale = 2;
+            parameter.Value = value.HasValue ? value.Value : DBNull.Value;
         }
     }
 
@@ -5820,6 +5915,11 @@ public class NotaController : ControllerBase
     private static bool EsBoleta(string? notaDocu)
     {
         return string.Equals((notaDocu ?? string.Empty).Trim(), "BOLETA", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string? ResolverEstadoPostEdicion(string? notaDocu, string? estadoSolicitado)
+    {
+        return EsBoleta(notaDocu) ? "EMITIDO" : estadoSolicitado;
     }
 
     private static long? ExtraerNotaIdDeRegistro(string? resultadoRegistro)
