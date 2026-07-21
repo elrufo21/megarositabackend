@@ -22,6 +22,7 @@ public class Compania
     public string? TokenApi { get; set; }
     public string? ClienIdToken { get; set; }
     public decimal? DescuentoMax { get; set; }
+    public decimal? Descuento { get; set; }
     public int? DiasMaxDep { get; set; }
     public DateTime? RenovacionOSE { get; set; }
     public DateTime? RenovacionFirma { get; set; }

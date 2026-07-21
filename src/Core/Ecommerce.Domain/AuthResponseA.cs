@@ -9,6 +9,7 @@ public class AuthResponseA
     public string? RazonSocial { get; set; }
     public string? FechaVencimientoClave { get; set; }
     public string? DescuentoMax { get; set; }
+    public string? Descuento { get; set; }
     public string? CompaniaRuc { get; set; }
     public string? CompaniaNomUbg { get; set; }
     public string? CompaniaComercial { get; set; }

@@ -1773,7 +1773,7 @@ public class NotaController : ControllerBase
         var usuarioId = "7";
         var docuGravada = nota.DocuGravada ?? ResolverDocuGravada(xDocumento, docuSubtotal, total, movilidad, adicional, descuento, icbper);
         var docuDescuento = nota.DocuDescuento ?? ResolverDocuDescuento(xDocumento, descuento);
-        var notaEstado = EsBoleta(xDocumento) ? "EMITIDO" : (nota.NotaEstado ?? "PENDIENTE");
+        var notaEstado = ResolverEstadoVenta(xDocumento, nota.NotaEstado);
 
         var headerFields = new List<string?>
         {
@@ -1989,8 +1989,7 @@ public class NotaController : ControllerBase
         var tarjeta = GetFirstDecimal(res, 0m, "Tarjeta", "NotaTarjeta");
         var pagar = GetFirstDecimal(res, total, "Pagar", "NotaPagar", "PagoTotal");
         var estado = GetFirstString(res, "Estado", "NotaEstado", "EstadoSunat");
-        if (string.IsNullOrWhiteSpace(estado)) estado = "PENDIENTE";
-        if (EsBoleta(docu)) estado = "EMITIDO";
+        estado = ResolverEstadoVenta(docu, estado);
         var companiaId = GetFirstString(res, "CompaniaId");
         var entrega = GetFirstString(res, "Entrega", "NotaEntrega");
         var concepto = GetFirstString(res, "Concepto", "NotaConcepto");
@@ -2172,6 +2171,8 @@ public class NotaController : ControllerBase
     private string BuildEditarPayloadLegacy(NotaPedido nota, IEnumerable<DetalleNota> detalles)
     {
         var detalleList = detalles == null ? new List<DetalleNota>() : new List<DetalleNota>(detalles);
+        var notaDocu = string.IsNullOrWhiteSpace(nota.NotaDocu) ? "BOLETA" : nota.NotaDocu!;
+        var notaSerie = ResolveVentaSerie(nota.NotaSerie, notaDocu);
 
         var icbper = nota.ICBPER ?? 0m;
         var totalDetalle = detalleList.Sum(x => x.DetalleImporte ?? 0m);
@@ -2191,7 +2192,7 @@ public class NotaController : ControllerBase
         var headerFields = new List<string?>
         {
             (nota.NotaId > 0 ? nota.NotaId : 0).ToString(CultureInfo.InvariantCulture),
-            string.IsNullOrWhiteSpace(nota.NotaDocu) ? "BOLETA" : nota.NotaDocu,
+            notaDocu,
             (nota.ClienteId ?? 0).ToString(CultureInfo.InvariantCulture),
             nota.NotaUsuario ?? string.Empty,
             nota.NotaFormaPago ?? string.Empty,
@@ -2208,7 +2209,7 @@ public class NotaController : ControllerBase
             (nota.CompaniaId ?? 0).ToString(CultureInfo.InvariantCulture),
             nota.NotaEntrega ?? string.Empty,
             string.IsNullOrWhiteSpace(nota.ModificadoPor) ? (nota.NotaUsuario ?? string.Empty) : nota.ModificadoPor,
-            nota.NotaSerie ?? string.Empty,
+            notaSerie,
             nota.NotaNumero ?? string.Empty,
             "SI",
             Format2(nota.NotaGanancia ?? 0m),
@@ -2285,7 +2286,7 @@ public class NotaController : ControllerBase
         }
         var entrega = GetFirstString(res, "Entrega", "NotaEntrega");
         var modificadoPor = GetFirstString(res, "ModificadoPor", "Usuario", "NotaUsuario");
-        var serie = GetFirstString(res, "NotaSerie", "Serie");
+        var serie = ResolveVentaSerie(GetFirstString(res, "NotaSerie", "Serie"), docu);
         var numero = GetFirstString(res, "NotaNumero", "Numero", "NroOperacion");
         var ganancia = GetFirstDecimal(res, 0m, "Ganancia", "NotaGanancia");
         var letra = Letras.enletras(total.ToString("N2", CultureInfo.InvariantCulture)) + "  SOLES";
@@ -2369,6 +2370,29 @@ public class NotaController : ControllerBase
         }
 
         return string.Join("|", headerFields) + "[" + string.Join(";", detailParts);
+    }
+
+    private static string ResolveVentaSerie(string? serie, string? documento)
+    {
+        var serieValue = (serie ?? string.Empty).Trim().ToUpperInvariant();
+        var docuValue = (documento ?? string.Empty).Trim().ToUpperInvariant();
+
+        if (docuValue.Contains("FACTURA") && !serieValue.StartsWith("FA", StringComparison.OrdinalIgnoreCase))
+        {
+            return "FA01";
+        }
+
+        if (docuValue.Contains("BOLETA") && !serieValue.StartsWith("BA", StringComparison.OrdinalIgnoreCase))
+        {
+            return "BA01";
+        }
+
+        if (docuValue.Contains("PROFORMA") && string.IsNullOrWhiteSpace(serieValue))
+        {
+            return "0001";
+        }
+
+        return serieValue;
     }
 
     private async Task<string> EjecutarEditarOrdenConFallbackAsync(string payloadWeb, string payloadLegacy, CancellationToken cancellationToken)
@@ -5917,9 +5941,16 @@ public class NotaController : ControllerBase
         return string.Equals((notaDocu ?? string.Empty).Trim(), "BOLETA", StringComparison.OrdinalIgnoreCase);
     }
 
+    private static string ResolverEstadoVenta(string? notaDocu, string? estadoSolicitado)
+    {
+        if (EsBoleta(notaDocu)) return "EMITIDO";
+        if (EsFactura(notaDocu)) return "PENDIENTE";
+        return string.IsNullOrWhiteSpace(estadoSolicitado) ? "PENDIENTE" : estadoSolicitado;
+    }
+
     private static string? ResolverEstadoPostEdicion(string? notaDocu, string? estadoSolicitado)
     {
-        return EsBoleta(notaDocu) ? "EMITIDO" : estadoSolicitado;
+        return ResolverEstadoVenta(notaDocu, estadoSolicitado);
     }
 
     private static long? ExtraerNotaIdDeRegistro(string? resultadoRegistro)
