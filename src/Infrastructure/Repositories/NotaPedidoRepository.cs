@@ -39,13 +39,13 @@ public class NotaPedidoRepository : INotaPedido
 
     public async Task<string> EditarOrdenAsync(string data, CancellationToken cancellationToken = default)
     {
+        var usesCompleteEditPayload = CountHeaderFields(data) > 7;
         var attempts = new (string Sp, string Param)[]
         {
             ("web.uspEditarNotaPedidowEB_web", "@Data"),
             ("web.uspEditarNotaPedidowEB", "@Data"),
             ("dbo.uspEditarNotaPedidowEB", "@Data"),
             ("uspEditarNotaPedidowEB", "@Data"),
-            ("uspEditarNotaPedido", "@Data"),
             ("uspEditarNotaPedido", "@ListaOrden")
         };
 
@@ -53,6 +53,14 @@ public class NotaPedidoRepository : INotaPedido
 
         foreach (var attempt in attempts)
         {
+            if (
+                usesCompleteEditPayload &&
+                attempt.Sp.Contains("uspEditarNotaPedidowEB", StringComparison.OrdinalIgnoreCase)
+            )
+            {
+                continue;
+            }
+
             try
             {
                 var result = await _accesoDatos.EjecutarComandoAsync(
@@ -75,6 +83,14 @@ public class NotaPedidoRepository : INotaPedido
         }
 
         return "error";
+    }
+
+    private static int CountHeaderFields(string data)
+    {
+        if (string.IsNullOrWhiteSpace(data)) return 0;
+        var bracket = data.IndexOf('[', StringComparison.Ordinal);
+        var header = bracket >= 0 ? data[..bracket] : data;
+        return header.Split('|').Length;
     }
 
     public async Task<string> AnularDocumentoAsync(string listaOrden, CancellationToken cancellationToken = default)
@@ -766,21 +782,24 @@ public class NotaPedidoRepository : INotaPedido
     {
         (page, pageSize) = NormalizePagination(page, pageSize);
         const string sql = @"WITH Detalles AS (
-                                SELECT DetalleId,
-                                       NotaId,
-                                       IdProducto,
-                                       DetalleCantidad,
-                                       DetalleUm,
-                                       DetalleDescripcion,
-                                       DetalleCosto,
-                                       DetallePrecio,
-                                       DetalleImporte,
-                                       DetalleEstado,
-                                       CantidadSaldo,
-                                       ValorUM,
-                                       ROW_NUMBER() OVER (ORDER BY DetalleId) AS rn
-                                FROM DetallePedido
-                                WHERE NotaId = @NotaId
+                                SELECT dp.DetalleId,
+                                       dp.NotaId,
+                                       dp.IdProducto,
+                                       dp.DetalleCantidad,
+                                       dp.DetalleUm,
+                                       dp.DetalleDescripcion,
+                                       dp.DetalleCosto,
+                                       dp.DetallePrecio,
+                                       dp.DetalleImporte,
+                                       dp.DetalleEstado,
+                                       dp.CantidadSaldo,
+                                       dp.ValorUM,
+                                       p.ProductoVentaB AS PrecioB,
+                                       p.ProductoCantidad AS Stock,
+                                       ROW_NUMBER() OVER (ORDER BY dp.DetalleId) AS rn
+                                FROM DetallePedido dp
+                                LEFT JOIN Producto p ON p.IdProducto = dp.IdProducto
+                                WHERE dp.NotaId = @NotaId
                              )
                              SELECT DetalleId,
                                     NotaId,
@@ -793,7 +812,9 @@ public class NotaPedidoRepository : INotaPedido
                                     DetalleImporte,
                                     DetalleEstado,
                                     CantidadSaldo,
-                                    ValorUM
+                                    ValorUM,
+                                    PrecioB,
+                                    Stock
                              FROM Detalles
                              WHERE rn BETWEEN @StartRow AND @EndRow
                              ORDER BY rn;";
@@ -996,12 +1017,12 @@ public class NotaPedidoRepository : INotaPedido
             cmd.Parameters.AddWithValue($"@DetalleId{i}", detalle.DetalleId);
             cmd.Parameters.AddWithValue($"@IdProducto{i}", (object?)detalle.IdProducto ?? DBNull.Value);
             cmd.Parameters.AddWithValue($"@DetalleCantidad{i}", (object?)detalle.DetalleCantidad ?? DBNull.Value);
-            cmd.Parameters.AddWithValue($"@DetalleUm{i}", (object?)detalle.DetalleUm ?? DBNull.Value);
-            cmd.Parameters.AddWithValue($"@DetalleDescripcion{i}", (object?)detalle.DetalleDescripcion ?? DBNull.Value);
+            cmd.Parameters.AddWithValue($"@DetalleUm{i}", (object?)Upper(detalle.DetalleUm) ?? DBNull.Value);
+            cmd.Parameters.AddWithValue($"@DetalleDescripcion{i}", (object?)Upper(detalle.DetalleDescripcion) ?? DBNull.Value);
             cmd.Parameters.AddWithValue($"@DetalleCosto{i}", (object?)detalle.DetalleCosto ?? DBNull.Value);
             cmd.Parameters.AddWithValue($"@DetallePrecio{i}", (object?)detalle.DetallePrecio ?? DBNull.Value);
             cmd.Parameters.AddWithValue($"@DetalleImporte{i}", (object?)detalle.DetalleImporte ?? DBNull.Value);
-            cmd.Parameters.AddWithValue($"@DetalleEstado{i}", (object?)detalle.DetalleEstado ?? DBNull.Value);
+            cmd.Parameters.AddWithValue($"@DetalleEstado{i}", (object?)Upper(detalle.DetalleEstado) ?? DBNull.Value);
             cmd.Parameters.AddWithValue($"@CantidadSaldo{i}", (object?)detalle.CantidadSaldo ?? DBNull.Value);
             cmd.Parameters.AddWithValue($"@ValorUM{i}", (object?)detalle.ValorUM ?? DBNull.Value);
         }
@@ -1011,15 +1032,15 @@ public class NotaPedidoRepository : INotaPedido
 
     private static void AddParameters(SqlCommand cmd, NotaPedido notaPedido)
     {
-        AddParam(cmd, "@NotaDocu", notaPedido.NotaDocu);
+        AddParam(cmd, "@NotaDocu", Upper(notaPedido.NotaDocu));
         AddParam(cmd, "@ClienteId", notaPedido.ClienteId);
         AddParam(cmd, "@NotaFecha", notaPedido.NotaFecha);
-        AddParam(cmd, "@NotaUsuario", notaPedido.NotaUsuario);
-        AddParam(cmd, "@NotaFormaPago", notaPedido.NotaFormaPago);
-        AddParam(cmd, "@NotaCondicion", notaPedido.NotaCondicion);
+        AddParam(cmd, "@NotaUsuario", Upper(notaPedido.NotaUsuario));
+        AddParam(cmd, "@NotaFormaPago", Upper(notaPedido.NotaFormaPago));
+        AddParam(cmd, "@NotaCondicion", Upper(notaPedido.NotaCondicion));
         AddParam(cmd, "@NotaFechaPago", notaPedido.NotaFechaPago);
-        AddParam(cmd, "@NotaDireccion", notaPedido.NotaDireccion);
-        AddParam(cmd, "@NotaTelefono", notaPedido.NotaTelefono);
+        AddParam(cmd, "@NotaDireccion", Upper(notaPedido.NotaDireccion));
+        AddParam(cmd, "@NotaTelefono", Upper(notaPedido.NotaTelefono));
         AddParam(cmd, "@NotaSubtotal", notaPedido.NotaSubtotal);
         AddParam(cmd, "@NotaMovilidad", notaPedido.NotaMovilidad);
         AddParam(cmd, "@NotaDescuento", notaPedido.NotaDescuento);
@@ -1029,17 +1050,17 @@ public class NotaPedidoRepository : INotaPedido
         AddParam(cmd, "@NotaAdicional", notaPedido.NotaAdicional);
         AddParam(cmd, "@NotaTarjeta", notaPedido.NotaTarjeta);
         AddParam(cmd, "@NotaPagar", notaPedido.NotaPagar);
-        AddParam(cmd, "@NotaEstado", notaPedido.NotaEstado);
+        AddParam(cmd, "@NotaEstado", Upper(notaPedido.NotaEstado));
         AddParam(cmd, "@CompaniaId", notaPedido.CompaniaId);
-        AddParam(cmd, "@NotaEntrega", notaPedido.NotaEntrega);
-        AddParam(cmd, "@ModificadoPor", notaPedido.ModificadoPor);
+        AddParam(cmd, "@NotaEntrega", Upper(notaPedido.NotaEntrega));
+        AddParam(cmd, "@ModificadoPor", Upper(notaPedido.ModificadoPor));
         AddParam(cmd, "@FechaEdita", notaPedido.FechaEdita);
-        AddParam(cmd, "@NotaConcepto", notaPedido.NotaConcepto);
-        AddParam(cmd, "@NotaSerie", notaPedido.NotaSerie);
+        AddParam(cmd, "@NotaConcepto", Upper(notaPedido.NotaConcepto));
+        AddParam(cmd, "@NotaSerie", Upper(notaPedido.NotaSerie));
         var numeroOperacion = string.IsNullOrWhiteSpace(notaPedido.NotaNumero)
             ? notaPedido.NroOperacion
             : notaPedido.NotaNumero;
-        AddParam(cmd, "@NotaNumero", numeroOperacion);
+        AddParam(cmd, "@NotaNumero", Upper(numeroOperacion));
         AddParam(cmd, "@NotaGanancia", notaPedido.NotaGanancia);
         AddParam(cmd, "@ICBPER", notaPedido.ICBPER);
         AddParam(cmd, "@CajaId", notaPedido.CajaId);
@@ -1050,6 +1071,9 @@ public class NotaPedidoRepository : INotaPedido
     {
         cmd.Parameters.AddWithValue(name, value ?? DBNull.Value);
     }
+
+    private static string? Upper(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim().ToUpperInvariant();
 
     private static NotaPedido Map(SqlDataReader reader)
     {
@@ -1160,8 +1184,19 @@ public class NotaPedidoRepository : INotaPedido
             DetalleImporte = reader["DetalleImporte"] == DBNull.Value ? null : Convert.ToDecimal(reader["DetalleImporte"]),
             DetalleEstado = reader["DetalleEstado"].ToString(),
             CantidadSaldo = reader["CantidadSaldo"] == DBNull.Value ? null : Convert.ToDecimal(reader["CantidadSaldo"]),
-            ValorUM = reader["ValorUM"] == DBNull.Value ? null : Convert.ToDecimal(reader["ValorUM"])
+            ValorUM = reader["ValorUM"] == DBNull.Value ? null : Convert.ToDecimal(reader["ValorUM"]),
+            PrecioB = HasColumn(reader, "PrecioB") && reader["PrecioB"] != DBNull.Value ? Convert.ToDecimal(reader["PrecioB"]) : null,
+            Stock = HasColumn(reader, "Stock") && reader["Stock"] != DBNull.Value ? Convert.ToDecimal(reader["Stock"]) : null
         };
+    }
+
+    private static bool HasColumn(SqlDataReader reader, string columnName)
+    {
+        for (var i = 0; i < reader.FieldCount; i++)
+        {
+            if (string.Equals(reader.GetName(i), columnName, StringComparison.OrdinalIgnoreCase)) return true;
+        }
+        return false;
     }
 
     private static (int page, int pageSize) NormalizePagination(int page, int pageSize)

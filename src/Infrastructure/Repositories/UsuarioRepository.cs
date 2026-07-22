@@ -76,10 +76,8 @@ public class UsuarioRepository : IUsuario
             CompaniaId = GetPayloadValue(payload, 4),
             RazonSocial = GetPayloadValue(payload, 5),
             FechaVencimientoClave = esFormatoNuevo ? null : GetPayloadValue(payload, 6, null),
-            DescuentoMax = esFormatoNuevo ? GetPayloadValue(payload, 6, "0") : GetPayloadValue(payload, 7, "0"),
-            Descuento = esFormatoNuevo
-                ? GetPayloadValue(payload, 19, GetPayloadValue(payload, 6, "0"))
-                : GetPayloadValue(payload, 7, "0"),
+            DescuentoMax = esFormatoNuevo ? GetPayloadValue(payload, 6, "0") : GetPayloadValue(payload, 12, "0"),
+            Descuento = esFormatoNuevo ? GetPayloadValue(payload, 6, "0") : GetPayloadValue(payload, 12, "0"),
             CompaniaRuc = esFormatoNuevo ? GetPayloadValue(payload, 7) : GetPayloadValue(payload, 8),
             CompaniaNomUbg = esFormatoNuevo ? GetPayloadValue(payload, 8) : GetPayloadValue(payload, 9),
             CompaniaComercial = esFormatoNuevo ? GetPayloadValue(payload, 9) : GetPayloadValue(payload, 10),

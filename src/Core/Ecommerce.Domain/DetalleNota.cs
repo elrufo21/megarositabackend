@@ -14,4 +14,6 @@ public class DetalleNota
     public string? DetalleEstado { get; set; }
     public decimal? CantidadSaldo { get; set; }
     public decimal? ValorUM { get; set; }
+    public decimal? PrecioB { get; set; }
+    public decimal? Stock { get; set; }
 }

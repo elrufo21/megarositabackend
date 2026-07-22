@@ -1661,9 +1661,9 @@ public class NotaController : ControllerBase
                 request.Nota.CompaniaId = companiaResuelta;
             }
 
-            var vdataNota = BuildEditarPayload(request.Nota, detalles);
             var vdataNotaLegacy = BuildEditarPayloadLegacy(request.Nota, detalles);
-            var resultado = await EjecutarEditarOrdenConFallbackAsync(vdataNota, vdataNotaLegacy, cancellationToken);
+            var vdataNota = BuildEditarPayload(request.Nota, detalles);
+            var resultado = await EjecutarEditarOrdenConFallbackAsync(vdataNotaLegacy, vdataNota, cancellationToken);
 
             await ActualizarAuditoriaPostEdicionAsync(
                 request.Nota.NotaId,
@@ -1681,6 +1681,11 @@ public class NotaController : ControllerBase
             await MarcarFlagMovilSiCorrespondeAsync(
                 request.Nota.NotaId,
                 request.Nota.FlagMovil,
+                cancellationToken);
+            await ForzarContactoNotaPostEdicionAsync(
+                request.Nota.NotaId,
+                request.Nota.NotaDireccion,
+                request.Nota.NotaTelefono,
                 cancellationToken);
             await SincronizarDetallesProformaPostEdicionAsync(request.Nota, detalles, cancellationToken);
             await ActualizarTributacionPostEdicionAsync(request.Nota, detalles, cancellationToken);
@@ -1709,7 +1714,7 @@ public class NotaController : ControllerBase
         var companiaIdBody = TryGetIntFromJson(body, "CompaniaId");
         var companiaIdResuelta = await ResolverCompaniaIdEdicionAsync(notaIdBody ?? 0, companiaIdBody, cancellationToken);
         var vdataLegacy = BuildEditarPayloadLegacy(body, companiaIdResuelta);
-        var resultadoRaw = await EjecutarEditarOrdenConFallbackAsync(vdata, vdataLegacy, cancellationToken);
+        var resultadoRaw = await EjecutarEditarOrdenConFallbackAsync(vdataLegacy, vdata, cancellationToken);
 
         var notaIdEstado = TryGetIntFromJson(body, "NotaId", "NotaIDBR", "NotaIdbr", "IDBR") ?? 0;
         var estadoBody = ExtractNotaEstado(body);
@@ -1724,6 +1729,11 @@ public class NotaController : ControllerBase
         await MarcarFlagMovilSiCorrespondeAsync(
             notaIdEstado,
             TryGetIntFromJson(body, "FlagMovil", "flagMovil"),
+            cancellationToken);
+        await ForzarContactoNotaPostEdicionAsync(
+            notaIdEstado,
+            TryGetStringFromJson(body, "Direccion", "NotaDireccion"),
+            TryGetStringFromJson(body, "Telefono", "NotaTelefono"),
             cancellationToken);
         await ActualizarMontosPlanosPostEdicionAsync(body, notaIdEstado, cancellationToken);
         await ForzarEstadoDetallePostEdicionAsync(notaIdEstado, cancellationToken);
@@ -2446,27 +2456,25 @@ public class NotaController : ControllerBase
 
     private async Task<int> ResolverCompaniaIdEdicionAsync(long notaId, int? companiaIdPropuesta, CancellationToken cancellationToken)
     {
+        if (notaId > 0)
+        {
+            try
+            {
+                var existente = await _mediator.ObtenerPorIdAsync(notaId, cancellationToken);
+                if (existente?.CompaniaId is > 0)
+                {
+                    return existente.CompaniaId.Value;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "No se pudo resolver CompaniaId para NotaId {NotaId}.", notaId);
+            }
+        }
+
         if (companiaIdPropuesta.HasValue && companiaIdPropuesta.Value > 0)
         {
             return companiaIdPropuesta.Value;
-        }
-
-        if (notaId <= 0)
-        {
-            return 0;
-        }
-
-        try
-        {
-            var existente = await _mediator.ObtenerPorIdAsync(notaId, cancellationToken);
-            if (existente?.CompaniaId is > 0)
-            {
-                return existente.CompaniaId.Value;
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "No se pudo resolver CompaniaId para NotaId {NotaId}.", notaId);
         }
 
         return 0;
@@ -2678,6 +2686,42 @@ public class NotaController : ControllerBase
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "No se pudo marcar FlagMovil para NotaId={NotaId}.", notaId);
+        }
+    }
+
+    private async Task ForzarContactoNotaPostEdicionAsync(long notaId, string? notaDireccion, string? notaTelefono, CancellationToken cancellationToken)
+    {
+        if (notaId <= 0 || (notaDireccion is null && notaTelefono is null))
+        {
+            return;
+        }
+
+        var connectionString = _configuration.GetConnectionString("DefaultConnection");
+        if (string.IsNullOrWhiteSpace(connectionString))
+        {
+            return;
+        }
+
+        const string sql = """
+            UPDATE NotaPedido
+            SET NotaDireccion = COALESCE(@NotaDireccion, NotaDireccion),
+                NotaTelefono = COALESCE(@NotaTelefono, NotaTelefono)
+            WHERE NotaId = @NotaId;
+            """;
+
+        try
+        {
+            await using var con = new SqlConnection(connectionString);
+            await using var cmd = new SqlCommand(sql, con);
+            cmd.Parameters.AddWithValue("@NotaId", notaId);
+            cmd.Parameters.AddWithValue("@NotaDireccion", notaDireccion is null ? DBNull.Value : notaDireccion);
+            cmd.Parameters.AddWithValue("@NotaTelefono", notaTelefono is null ? DBNull.Value : notaTelefono);
+            await con.OpenAsync(cancellationToken);
+            await cmd.ExecuteNonQueryAsync(cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "No se pudo forzar contacto de NotaId={NotaId} post-edición.", notaId);
         }
     }
 
@@ -6863,6 +6907,8 @@ public class NotaController : ControllerBase
             const string sqlNota = """
                 UPDATE NotaPedido
                 SET NotaSubtotal = @NotaSubtotal,
+                    NotaMovilidad = @NotaMovilidad,
+                    NotaDescuento = @NotaDescuento,
                     NotaAdicional = @NotaAdicional,
                     NotaTotal = @NotaTotal,
                     ICBPER = @ICBPER,
@@ -6876,6 +6922,8 @@ public class NotaController : ControllerBase
             {
                 cmdNota.Parameters.AddWithValue("@NotaId", nota.NotaId);
                 cmdNota.Parameters.AddWithValue("@NotaSubtotal", subtotalNota);
+                cmdNota.Parameters.AddWithValue("@NotaMovilidad", movilidad);
+                cmdNota.Parameters.AddWithValue("@NotaDescuento", descuento);
                 cmdNota.Parameters.AddWithValue("@NotaAdicional", adicional);
                 cmdNota.Parameters.AddWithValue("@NotaTotal", totalDocumento);
                 cmdNota.Parameters.AddWithValue("@ICBPER", totalIcbper);

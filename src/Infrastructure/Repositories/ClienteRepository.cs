@@ -21,9 +21,9 @@ public class ClienteRepository : ICliente
 
     public async Task<string> InsertarAsync(Cliente cliente, CancellationToken cancellationToken = default)
     {
-        var movil = (cliente.ClienteMovil ?? cliente.ClienteTelefono)?.Trim();
-        var telefono = cliente.ClienteTelefono?.Trim();
-        var estado = string.IsNullOrWhiteSpace(cliente.ClienteEstado) ? "ACTIVO" : cliente.ClienteEstado.Trim();
+        var movil = Upper(cliente.ClienteMovil ?? cliente.ClienteTelefono);
+        var telefono = Upper(cliente.ClienteTelefono);
+        var estado = string.IsNullOrWhiteSpace(cliente.ClienteEstado) ? "ACTIVO" : Upper(cliente.ClienteEstado);
         var clienteId = cliente.ClienteId;
         var ruc = NormalizarDocumento(cliente.ClienteRuc);
         var dni = NormalizarDocumento(cliente.ClienteDni);
@@ -44,10 +44,13 @@ public class ClienteRepository : ICliente
             return "error: Ya existe un cliente con el mismo DNI.";
         }
 
-        var data = $"{cliente.ClienteId}|{cliente.ClienteRazon?.Trim()}|{cliente.ClienteRuc?.Trim()}|{cliente.ClienteDni?.Trim()}|{cliente.ClienteDireccion?.Trim()}|{movil}|{telefono}|{cliente.ClienteCorreo?.Trim()}|{estado}|{cliente.ClienteDespacho?.Trim()}|{cliente.ClienteUsuario}";
+        var data = $"{cliente.ClienteId}|{Upper(cliente.ClienteRazon)}|{cliente.ClienteRuc?.Trim()}|{cliente.ClienteDni?.Trim()}|{Upper(cliente.ClienteDireccion)}|{movil}|{telefono}|{cliente.ClienteCorreo?.Trim()}|{estado}|{Upper(cliente.ClienteDespacho)}|{Upper(cliente.ClienteUsuario)}";
         var result = await _accesoDatos.EjecutarComandoAsync("insertaClienteLD", "@Columna", data, cancellationToken);
         return string.IsNullOrWhiteSpace(result) ? "error" : result;
     }
+
+    private static string? Upper(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim().ToUpperInvariant();
 
     public async Task<bool> EliminarAsync(long id, CancellationToken cancellationToken = default)
     {

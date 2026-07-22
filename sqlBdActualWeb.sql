@@ -4416,14 +4416,16 @@ create procedure [dbo].[editarCompania]
 @CompaniaDireccion varchar(max),
 @CompaniaTelefono varchar(80),
 @CompaniaEmail varchar(100),
-@CompaniaIniFecha varchar(100)
+@CompaniaIniFecha varchar(100),
+@DescuentoMax decimal(18,2)
 as
 begin
 update Compania
 set CompaniaRazonSocial=@CompaniaRazonSocial,
 CompaniaRUC=@CompaniaRUC,CompaniaDireccion=@CompaniaDireccion,
 CompaniaTelefono=@CompaniaTelefono,CompaniaEmail=@CompaniaEmail,
-CompaniaIniFecha=@CompaniaIniFecha
+CompaniaIniFecha=@CompaniaIniFecha,
+DescuentoMax=@DescuentoMax
 where CompaniaId=@CompaniaId
 end
 GO
@@ -6050,16 +6052,16 @@ create procedure [dbo].[insertaClienteLD]
 	Set @p9 = CharIndex('|',@Columna,@p8+1)
 	Set @p10 = Len(@Columna)+1
 	Set @ClienteId=Convert(numeric(20),SUBSTRING(@Columna,1,@p0-1))
-	Set @ClienteRazon=SUBSTRING(@Columna,@p0+1,@p1-(@p0+1))
+	Set @ClienteRazon=UPPER(LTRIM(RTRIM(SUBSTRING(@Columna,@p0+1,@p1-(@p0+1)))))
 	Set @ClienteRuc=SUBSTRING(@Columna,@p1+1,@p2-(@p1+1))
 	Set @ClienteDni=SUBSTRING(@Columna,@p2+1,@p3-(@p2+1))
-	Set @ClienteDireccion=SUBSTRING(@Columna,@p3+1,@p4-(@p3+1))
-	Set @ClienteMovil=SUBSTRING(@Columna,@p4+1,@p5-(@p4+1))
-	Set @ClienteTelefono=SUBSTRING(@Columna,@p5+1,@p6-(@p5+1))
+	Set @ClienteDireccion=UPPER(LTRIM(RTRIM(SUBSTRING(@Columna,@p3+1,@p4-(@p3+1)))))
+	Set @ClienteMovil=UPPER(LTRIM(RTRIM(SUBSTRING(@Columna,@p4+1,@p5-(@p4+1)))))
+	Set @ClienteTelefono=UPPER(LTRIM(RTRIM(SUBSTRING(@Columna,@p5+1,@p6-(@p5+1)))))
 	Set @ClienteCorreo=SUBSTRING(@Columna,@p6+1,@p7-(@p6+1))
-	Set @ClienteEstado=SUBSTRING(@Columna,@p7+1,@p8-(@p7+1))
-	Set @ClienteDespacho=SUBSTRING(@Columna,@p8+1,@p9-@p8-1)
-    Set @Usuario=SUBSTRING(@Columna,@p9+1,@p10-(@p9+1))
+	Set @ClienteEstado=UPPER(LTRIM(RTRIM(SUBSTRING(@Columna,@p7+1,@p8-(@p7+1)))))
+	Set @ClienteDespacho=UPPER(LTRIM(RTRIM(SUBSTRING(@Columna,@p8+1,@p9-@p8-1))))
+    Set @Usuario=UPPER(LTRIM(RTRIM(SUBSTRING(@Columna,@p9+1,@p10-(@p9+1)))))
 if(@ClienteId=0)
 begin
 	insert into Cliente values(@ClienteRazon,@ClienteRuc,@ClienteDni,@ClienteDireccion,@ClienteMovil,@ClienteTelefono,@ClienteCorreo,@ClienteEstado,@ClienteDespacho,@Usuario,GETDATE())

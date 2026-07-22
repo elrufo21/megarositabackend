@@ -2,7 +2,7 @@
 .DS_Store
 Thumbs.db
 .vscode/
-
+appsettings.json
 # .NET build outputs
 **/bin/
 **/obj/

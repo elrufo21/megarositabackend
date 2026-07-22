@@ -37,7 +37,6 @@ public class CompaniaRepository : ICompania
                                 TokenApi,
                                 ClienIdToken,
                                 DescuentoMax,
-                                Descuento,
                                 RenovacionOSE,
                                 RenovacionFirma,
                                 RenovacionSome,
@@ -66,7 +65,6 @@ public class CompaniaRepository : ICompania
                                 @TokenApi,
                                 @ClienIdToken,
                                 @DescuentoMax,
-                                @Descuento,
                                 @RenovacionOSE,
                                 @RenovacionFirma,
                                 @RenovacionSome,
@@ -106,7 +104,6 @@ public class CompaniaRepository : ICompania
                                 TokenApi = @TokenApi,
                                 ClienIdToken = @ClienIdToken,
                                 DescuentoMax = @DescuentoMax,
-                                Descuento = @Descuento,
                                 RenovacionOSE = @RenovacionOSE,
                                 RenovacionFirma = @RenovacionFirma,
                                 RenovacionSome = @RenovacionSome,
@@ -356,11 +353,6 @@ public class CompaniaRepository : ICompania
         descuentoParam.Precision = 18;
         descuentoParam.Scale = 2;
         descuentoParam.Value = (object?)compania.DescuentoMax ?? DBNull.Value;
-
-        var descuentoActualParam = cmd.Parameters.Add("@Descuento", System.Data.SqlDbType.Decimal);
-        descuentoActualParam.Precision = 18;
-        descuentoActualParam.Scale = 2;
-        descuentoActualParam.Value = (object?)compania.Descuento ?? DBNull.Value;
 
         cmd.Parameters.AddWithValue("@RenovacionOSE", (object?)compania.RenovacionOSE ?? DBNull.Value);
         cmd.Parameters.AddWithValue("@RenovacionFirma", (object?)compania.RenovacionFirma ?? DBNull.Value);
