@@ -838,7 +838,6 @@ public class NotaPedidoRepository : INotaPedido
 
     public async Task<NotaListadoPaginadoResponse> ListarAsync(DateTime fechaInicio, DateTime fechaFin, int page = 1, int pageSize = 50, CancellationToken cancellationToken = default)
     {
-        (page, pageSize) = NormalizePagination(page, pageSize);
         var attempts = new[]
         {
             "web.listaNotaPedido_web",
@@ -883,26 +882,24 @@ public class NotaPedidoRepository : INotaPedido
         {
             return new NotaListadoPaginadoResponse
             {
-                Page = page,
-                PageSize = pageSize,
+                Page = 1,
+                PageSize = 0,
                 Total = 0,
-                TotalPages = 0,
+                TotalPages = 1,
                 Items = Array.Empty<EListaNota>()
             };
         }
 
         var lista = Cadena.AlistaCamposNota(result);
         var total = lista.Count;
-        var totalPages = total == 0 ? 0 : (int)Math.Ceiling(total / (double)pageSize);
-        var items = lista.Skip((page - 1) * pageSize).Take(pageSize).ToList();
 
         return new NotaListadoPaginadoResponse
         {
-            Page = page,
-            PageSize = pageSize,
+            Page = 1,
+            PageSize = total,
             Total = total,
-            TotalPages = totalPages,
-            Items = items
+            TotalPages = 1,
+            Items = lista
         };
     }
 
