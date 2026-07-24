@@ -35,6 +35,7 @@ DECLARE
 @NotaSerieActual VARCHAR(60),
 @NotaNumeroActual VARCHAR(60),
 @CompaniaIdActual INT,
+@CompaniaIdNueva INT,
 @SerieObjetivo VARCHAR(60),
 @NumeroObjetivo VARCHAR(60),
 @MaxDocuNumero INT,
@@ -48,7 +49,7 @@ SET @Cabecera = SUBSTRING(@Data,1,@pos1-1)
 SET @Detalle  = SUBSTRING(@Data,@pos1+1,@pos2-@pos1-1)  
   
 DECLARE  
-@p1 INT,@p2 INT,@p3 INT,@p4 INT,@p5 INT,@p6 INT,@p7 INT  
+@p1 INT,@p2 INT,@p3 INT,@p4 INT,@p5 INT,@p6 INT,@p7 INT,@p8 INT  
   
 SET @p1 = CHARINDEX('|',@Cabecera,0)  
 SET @p2 = CHARINDEX('|',@Cabecera,@p1+1)  
@@ -56,7 +57,10 @@ SET @p3 = CHARINDEX('|',@Cabecera,@p2+1)
 SET @p4 = CHARINDEX('|',@Cabecera,@p3+1)  
 SET @p5 = CHARINDEX('|',@Cabecera,@p4+1)  
 SET @p6 = CHARINDEX('|',@Cabecera,@p5+1)  
-SET @p7 = LEN(@Cabecera)+1  
+SET @p7 = CHARINDEX('|',@Cabecera,@p6+1)
+IF @p7 = 0 SET @p7 = LEN(@Cabecera)+1
+SET @p8 = CHARINDEX('|',@Cabecera,@p7+1)
+IF @p8 = 0 SET @p8 = LEN(@Cabecera)+1
   
 SET @NotaId = CONVERT(INT,SUBSTRING(@Cabecera,1,@p1-1))  
 SET @NotaDocuNueva = UPPER(LTRIM(RTRIM(SUBSTRING(@Cabecera,@p1+1,@p2-@p1-1))))
@@ -65,6 +69,9 @@ SET @NotaFechaNueva = CONVERT(DATETIME,SUBSTRING(@Cabecera,@p3+1,@p4-@p3-1))
 SET @NotaUsuarioNuevo = SUBSTRING(@Cabecera,@p4+1,@p5-@p4-1)
 SET @NotaFormaPagoNueva = SUBSTRING(@Cabecera,@p5+1,@p6-@p5-1)
 SET @NotaCondicionNueva = SUBSTRING(@Cabecera,@p6+1,@p7-@p6-1)
+SET @CompaniaIdNueva = 0
+IF @p7 < LEN(@Cabecera) AND ISNUMERIC(SUBSTRING(@Cabecera,@p7+1,@p8-@p7-1)) = 1
+    SET @CompaniaIdNueva = CONVERT(INT,SUBSTRING(@Cabecera,@p7+1,@p8-@p7-1))
 
 SELECT TOP 1
     @NotaDocuActual = UPPER(LTRIM(RTRIM(ISNULL(NotaDocu, '')))),
@@ -73,6 +80,8 @@ SELECT TOP 1
     @CompaniaIdActual = ISNULL(CompaniaId, 0)
 FROM NotaPedido
 WHERE NotaId = @NotaId;
+
+IF ISNULL(@CompaniaIdNueva, 0) <= 0 SET @CompaniaIdNueva = @CompaniaIdActual;
 
 SET @SerieObjetivo = @NotaSerieActual;
 SET @NumeroObjetivo = @NotaNumeroActual;
@@ -95,7 +104,7 @@ BEGIN
                 END
             ), 0)
         FROM DocumentoVenta d
-        WHERE d.CompaniaId = @CompaniaIdActual
+        WHERE d.CompaniaId = @CompaniaIdNueva
           AND UPPER(LTRIM(RTRIM(ISNULL(d.DocuDocumento, '')))) = @NotaDocuNueva
           AND LTRIM(RTRIM(ISNULL(d.DocuSerie, ''))) = LTRIM(RTRIM(@SerieObjetivo));
 
@@ -109,7 +118,7 @@ BEGIN
                 END
             ), 0)
         FROM NotaPedido n
-        WHERE n.CompaniaId = @CompaniaIdActual
+        WHERE n.CompaniaId = @CompaniaIdNueva
           AND UPPER(LTRIM(RTRIM(ISNULL(n.NotaDocu, '')))) = @NotaDocuNueva
           AND LTRIM(RTRIM(ISNULL(n.NotaSerie, ''))) = LTRIM(RTRIM(@SerieObjetivo))
           AND n.NotaId <> @NotaId;
@@ -141,6 +150,7 @@ NotaFecha = @NotaFechaNueva,
 NotaUsuario = @NotaUsuarioNuevo,  
 NotaFormaPago = @NotaFormaPagoNueva,  
 NotaCondicion = @NotaCondicionNueva,
+CompaniaId = @CompaniaIdNueva,
 NotaSerie = CASE WHEN @NotaDocuNueva IN ('BOLETA', 'FACTURA') THEN @SerieObjetivo ELSE NotaSerie END,
 NotaNumero = CASE WHEN @NotaDocuNueva IN ('BOLETA', 'FACTURA') THEN @NumeroObjetivo ELSE NotaNumero END
 WHERE NotaId=@NotaId  

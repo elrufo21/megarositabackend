@@ -1711,7 +1711,7 @@ public class NotaController : ControllerBase
 
         var vdata = BuildEditarPayload(body);
         var notaIdBody = TryGetIntFromJson(body, "NotaId", "NotaIDBR", "NotaIdbr", "IDBR");
-        var companiaIdBody = TryGetIntFromJson(body, "CompaniaId");
+        var companiaIdBody = TryGetIntFromJson(body, "CompaniaId", "companiaId", "CompanyId", "companyId");
         var companiaIdResuelta = await ResolverCompaniaIdEdicionAsync(notaIdBody ?? 0, companiaIdBody, cancellationToken);
         var vdataLegacy = BuildEditarPayloadLegacy(body, companiaIdResuelta);
         var resultadoRaw = await EjecutarEditarOrdenConFallbackAsync(vdataLegacy, vdata, cancellationToken);
@@ -2005,7 +2005,7 @@ public class NotaController : ControllerBase
         var pagar = GetFirstDecimal(res, total, "Pagar", "NotaPagar", "PagoTotal");
         var estado = GetFirstString(res, "Estado", "NotaEstado", "EstadoSunat");
         estado = ResolverEstadoVenta(docu, estado);
-        var companiaId = GetFirstString(res, "CompaniaId");
+        var companiaId = GetFirstString(res, "CompaniaId", "companiaId", "CompanyId", "companyId");
         var entrega = GetFirstString(res, "Entrega", "NotaEntrega");
         var concepto = GetFirstString(res, "Concepto", "NotaConcepto");
         var serie = GetFirstString(res, "NotaSerie", "Serie");
@@ -2294,7 +2294,7 @@ public class NotaController : ControllerBase
         var adicional = GetFirstDecimal(res, 0m, "Adicional", "NotaAdicional", "DocuAdicional");
         var tarjeta = GetFirstDecimal(res, 0m, "Tarjeta", "NotaTarjeta");
         var pagar = GetFirstDecimal(res, total, "Pagar", "NotaPagar", "PagoTotal");
-        var companiaId = GetFirstString(res, "CompaniaId");
+        var companiaId = GetFirstString(res, "CompaniaId", "companiaId", "CompanyId", "companyId");
         if (string.IsNullOrWhiteSpace(companiaId))
         {
             companiaId = companiaIdFallback > 0 ? companiaIdFallback.ToString(CultureInfo.InvariantCulture) : "0";
@@ -2456,6 +2456,11 @@ public class NotaController : ControllerBase
 
     private async Task<int> ResolverCompaniaIdEdicionAsync(long notaId, int? companiaIdPropuesta, CancellationToken cancellationToken)
     {
+        if (companiaIdPropuesta.HasValue && companiaIdPropuesta.Value > 0)
+        {
+            return companiaIdPropuesta.Value;
+        }
+
         if (notaId > 0)
         {
             try
@@ -2470,11 +2475,6 @@ public class NotaController : ControllerBase
             {
                 _logger.LogWarning(ex, "No se pudo resolver CompaniaId para NotaId {NotaId}.", notaId);
             }
-        }
-
-        if (companiaIdPropuesta.HasValue && companiaIdPropuesta.Value > 0)
-        {
-            return companiaIdPropuesta.Value;
         }
 
         return 0;
@@ -2636,6 +2636,10 @@ public class NotaController : ControllerBase
 
         const string sql = """
             UPDATE NotaPedido
+            SET CompaniaId = @CompaniaId
+            WHERE NotaId = @NotaId;
+
+            UPDATE DocumentoVenta
             SET CompaniaId = @CompaniaId
             WHERE NotaId = @NotaId;
             """;

@@ -9,6 +9,7 @@ appsettings.json
 **/artifacts/
 artifacts/
 .tmp_build_api/
+.build-check/
 
 # Node / frontend artifacts (if present in this repo)
 node_modules/
