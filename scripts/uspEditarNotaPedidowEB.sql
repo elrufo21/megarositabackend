@@ -169,6 +169,7 @@ DECLARE
 @c1 INT,@c2 INT,@c3 INT,@c4 INT,@c5 INT,@c6 INT,@c7 INT,@c8 INT,@c9 INT,@c10 INT,  
 @IdProducto NUMERIC(20),  
 @Cantidad DECIMAL(18,2),  
+
 @CantidadSaldo DECIMAL(18,2),
 @NotaEntrega VARCHAR(40),
 @ValorUM DECIMAL(18,6),  
